@@ -44,6 +44,7 @@ W_PRIORITY_BASE = 100.0
 W_TEFF = 100.0
 W_CONN = 0.0
 W_EMPTY = 5000.0
+W_SLEW = 5.0  # スルー時間に対する直接的なペナルティ
 MAX_PRIORITY = 4
 
 # ============================================================
@@ -128,6 +129,7 @@ def compute_score(
     
     hard_violations = 0
     teff_sum = 0.0
+    total_slew_time = 0.0
 
     for d in range(n_nights):
         s_start = night_slots_start[d]
@@ -164,6 +166,7 @@ def compute_score(
                 t_slew = max(abs(az_diff) / 0.5, abs(alt_diff) / 0.5, abs(rot_diff) / 1.5)
                 
                 accumulated_slew_delay += t_slew
+                total_slew_time += t_slew
 
             start_sec = k * 1200.0 + accumulated_slew_delay
             start_min = int(start_sec // 60)
@@ -269,6 +272,7 @@ def compute_score(
                 
     score -= W_SPLIT * split_penalties
     score += W_TEFF * teff_sum
+    score -= W_SLEW * total_slew_time  # 合計スルー時間を減点
 
     # 空きスロットペナルティ
     empty_slots_count = 0
