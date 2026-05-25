@@ -528,34 +528,29 @@ def sa_optimize(
                             ti_slots_count += 1
                             
                 if ti_slots_count == L:
-                    is_valid = True
-                    for idx in range(L - 1):
-                        if (ti_slots[idx+1] - ti_slots[idx] != 1) or (slot_night_idx[ti_slots[idx]] != slot_night_idx[ti_slots[idx+1]]):
-                            is_valid = False
-                            break
-                    if is_valid:
-                        night_idx = slot_night_idx[ti_slots[0]]
-                        empty_blocks = np.zeros(n_slots, dtype=np.int32)
-                        empty_count = 0
-                        s_night_start = night_slots_start[night_idx]
-                        s_night_end = night_slots_end[night_idx]
-                        
-                        for s in range(s_night_start, s_night_end - L + 1):
+                    empty_blocks = np.zeros(n_slots, dtype=np.int32)
+                    empty_count = 0
+                    for s in range(n_slots - L + 1):
+                        if slot_night_idx[s] == slot_night_idx[s + L - 1]:
                             block_ok = True
-                            for idx in range(L):
-                                if schedule[s + idx] >= 0:
+                            for k in range(L):
+                                if vis_map[ti, s + k] == 0:
+                                    block_ok = False
+                                    break
+                                val = schedule[s + k]
+                                if val >= 0 and val != ti:
                                     block_ok = False
                                     break
                             if block_ok:
                                 empty_blocks[empty_count] = s
                                 empty_count += 1
                                     
-                        if empty_count > 0:
-                            new_start = empty_blocks[np.random.randint(0, empty_count)]
-                            for s_idx in range(L):
-                                new_schedule[ti_slots[s_idx]] = -1
-                            for k in range(L):
-                                new_schedule[new_start + k] = ti
+                    if empty_count > 0:
+                        new_start = empty_blocks[np.random.randint(0, empty_count)]
+                        for s_idx in range(L):
+                            new_schedule[ti_slots[s_idx]] = -1
+                        for k in range(L):
+                            new_schedule[new_start + k] = ti
 
         elif move_type < 0.60:
             observed_mask = np.zeros(n_targets, dtype=np.bool_)
