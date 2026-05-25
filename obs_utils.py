@@ -105,14 +105,14 @@ def parse_time(date_str, time_str, observer, is_end=False):
     # 12:00 HST = 22:00 UTC
     noon_utc = Time(f"{date_str} 22:00:00")
     
-    if time_str == 'sun_set':
+    if time_str in ['sun_set', 'twilight_end']:
         # Nearest sunset to noon of that day
-        return observer.sun_set_time(noon_utc, which='nearest', horizon=-13*u.deg)
-    elif time_str == 'sun_rise':
+        return observer.sun_set_time(noon_utc, which='nearest', horizon=-18*u.deg)
+    elif time_str in ['sun_rise', 'twilight_beg']:
         # Nearest sunrise to noon of that day (which would be the next morning)
         # Actually, for "night of Nov 12", sunrise is Nov 13 morning.
         # observer.sun_rise_time(noon_utc, which='next') should work from noon.
-        return observer.sun_rise_time(noon_utc, which='next', horizon=-13*u.deg)
+        return observer.sun_rise_time(noon_utc, which='next', horizon=-18*u.deg)
     else:
         # Parse HH:MM
         # Handle 24+ format (e.g., 24:05 -> 00:05 next day)

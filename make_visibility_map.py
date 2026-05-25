@@ -165,36 +165,17 @@ def utc_to_hst(dt_utc: datetime) -> datetime:
     return dt_utc + timedelta(hours=HST_OFFSET_H)
 
 
-def calc_sunset_hst(date_str: str) -> datetime:
-    """
-    指定日(HST)のSubaruにおける天文日没時刻(HST)を計算する。
-    太陽高度が SUN_SET_ALT_DEG を下回る最初の時刻を返す。
-    """
-    base = datetime.strptime(date_str, "%Y-%m-%d")
-    # 17:00〜21:00 HSTの範囲を1分刻みでサンプリング
-    search_start_hst = base + timedelta(hours=17)
-    times_hst = [search_start_hst + timedelta(minutes=m) for m in range(0, 5 * 60)]
-    times_utc = [hst_to_utc(t) for t in times_hst]
+def calc_twilight_end_hst(date_str: str) -> datetime:
+    observer = Observer(location=SUBARU)
+    noon_utc = Time(f"{date_str} 22:00:00")
+    t = observer.sun_set_time(noon_utc, which='nearest', horizon=-18*u.deg)
+    return t.to_datetime(timezone=datetime.timezone(datetime.timedelta(hours=HST_OFFSET_H))).replace(tzinfo=None)
 
-    astropy_times = Time(
-        [t.strftime("%Y-%m-%dT%H:%M:%S") for t in times_utc],
-        format="isot",
-        scale="utc",
-    )
-    altaz_frame = AltAz(obstime=astropy_times, location=SUBARU)
-    sun_coord = get_body("sun", astropy_times, SUBARU)
-    sun_alts = sun_coord.transform_to(altaz_frame).alt.deg
-
-    for i in range(len(sun_alts) - 1):
-        if sun_alts[i] >= SUN_SET_ALT_DEG > sun_alts[i + 1]:
-            # 線形補間で精度を上げる
-            frac = (sun_alts[i] - SUN_SET_ALT_DEG) / (sun_alts[i] - sun_alts[i + 1])
-            sunset_hst = times_hst[i] + timedelta(minutes=frac)
-            return sunset_hst
-
-    # フォールバック（通常は起きない）
-    print(f"  [WARNING] sunset not found for {date_str}, using 19:00 HST")
-    return base + timedelta(hours=19)
+def calc_twilight_beg_hst(date_str: str) -> datetime:
+    observer = Observer(location=SUBARU)
+    noon_utc = Time(f"{date_str} 22:00:00")
+    t = observer.sun_rise_time(noon_utc, which='next', horizon=-18*u.deg)
+    return t.to_datetime(timezone=datetime.timezone(datetime.timedelta(hours=HST_OFFSET_H))).replace(tzinfo=None)
 
 
 # ============================================================
@@ -229,17 +210,20 @@ def load_obsdates(filepath: Path) -> list[dict]:
         date_str, start_str, end_str = parts[0], parts[1], parts[2]
 
         # 開始時刻
-        if start_str.lower() == "sun_set":
-            print(f"  Calculating sunset for {date_str}...", end=" ")
-            start_hst = calc_sunset_hst(date_str)
-            # 日没後5分のバッファを取る（薄明終了の目安として最低限）
-            start_hst += timedelta(minutes=5)
+        if start_str.lower() in ["sun_set", "twilight_end"]:
+            print(f"  Calculating twilight end for {date_str}...", end=" ")
+            start_hst = calc_twilight_end_hst(date_str)
             print(f"=> {start_hst.strftime('%H:%M')} HST")
         else:
             start_hst = parse_hst_time_str(date_str, start_str)
 
         # 終了時刻
-        end_hst = parse_hst_time_str(date_str, end_str)
+        if end_str.lower() in ["sun_rise", "twilight_beg"]:
+            print(f"  Calculating twilight beg for {date_str}...", end=" ")
+            end_hst = calc_twilight_beg_hst(date_str)
+            print(f"=> {end_hst.strftime('%H:%M')} HST")
+        else:
+            end_hst = parse_hst_time_str(date_str, end_str)
 
         # スロット生成（スロット開始時刻のみ記録）
         slots_utc = []
