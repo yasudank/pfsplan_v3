@@ -5,6 +5,8 @@ import datetime
 import urllib.request
 import urllib.parse
 from html.parser import HTMLParser
+from obs_utils import load_config
+
 
 # Month abbreviation mapping for NAOJ schedule CGI
 MONTH_MAP = {
@@ -338,6 +340,10 @@ def main():
         print(f"  Day {day:02d}: {slot} night")
         
     # 5. Format and compute times for output
+    config = load_config()
+    split_margin = config['scheduling']['split_margin_minutes']
+    print(f"Using split margin of {split_margin} minutes from configuration.")
+    
     output_lines = []
     output_lines.append(f"{'date':<11}{'start':<15}{'end'}")
     
@@ -359,19 +365,20 @@ def main():
             t_split = "0:20"
             
         # Apply offset rules:
-        # - First half end = split_time - 5 minutes (formatted 24h+)
-        # - Second half start = split_time + 5 minutes (formatted 24h+)
+        # - First half end = split_time - split_margin minutes (formatted 24h+)
+        # - Second half start = split_time + split_margin minutes (formatted 24h+)
         if slot == "whole":
             start_val = "twilight_end"
             end_val = "twilight_beg"
         elif slot == "first":
             start_val = "twilight_end"
-            end_val = format_time_24h_plus(add_minutes_to_time_str(t_split, -5))
+            end_val = format_time_24h_plus(add_minutes_to_time_str(t_split, -split_margin))
         elif slot == "second":
-            start_val = format_time_24h_plus(add_minutes_to_time_str(t_split, 5))
+            start_val = format_time_24h_plus(add_minutes_to_time_str(t_split, split_margin))
             end_val = "twilight_beg"
             
         output_lines.append(f"{date_str:<11}{start_val:<15}{end_val}")
+
         
     # 6. Save to output file
     output_filename = f"obsdates_{year}{month}.txt"

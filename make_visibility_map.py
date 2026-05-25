@@ -15,31 +15,30 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import matplotlib.colors as mcolors
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from astropy.coordinates import EarthLocation, SkyCoord, AltAz, get_body
 from astropy.time import Time
 import astropy.units as u
 from astropy.table import Table, vstack
 from astroplan import Observer
+from obs_utils import load_config
 
 # ============================================================
 # 設定定数
 # ============================================================
 
-# Subaru望遠鏡の位置（Mauna Kea, Hawaii）
-SUBARU = EarthLocation(
-    lat=19.8258 * u.deg,
-    lon=-155.4750 * u.deg,
-    height=4139.0 * u.m,
-)
+config = load_config()
 
-HST_OFFSET_H = -10        # HST = UTC - 10h
-MIN_ALT_DEG = 32.5        # 最低観測高度 [deg]
-MAX_ALT_DEG = 75.0        # 最高観測高度 [deg]
-MIN_ROT_DEG = -174.0      # 最小ローテーター回転角 [deg]
-MAX_ROT_DEG = 174.0      # 最大ローテーター回転角 [deg]
-SLOT_MINUTES = 20         # 1スロット = 20分
+# Subaru望遠鏡の位置（Mauna Kea, Hawaii）
+SUBARU = EarthLocation.of_site(config['location']['name'])
+
+HST_OFFSET_H = config['location']['hst_offset_hours']
+MIN_ALT_DEG = config['constraints']['min_altitude']
+MAX_ALT_DEG = config['constraints']['max_altitude']
+MIN_ROT_DEG = config['constraints']['rotator_min']
+MAX_ROT_DEG = config['constraints']['rotator_max']
+SLOT_MINUTES = config['scheduling']['slot_duration_minutes']
 SUN_SET_ALT_DEG = -0.833  # 日没の定義（気差補正込み）
 
 OBSDIR = Path(__file__).parent
@@ -167,15 +166,20 @@ def utc_to_hst(dt_utc: datetime) -> datetime:
 
 def calc_twilight_end_hst(date_str: str) -> datetime:
     observer = Observer(location=SUBARU)
-    noon_utc = Time(f"{date_str} 22:00:00")
-    t = observer.sun_set_time(noon_utc, which='nearest', horizon=-18*u.deg)
-    return t.to_datetime(timezone=datetime.timezone(datetime.timedelta(hours=HST_OFFSET_H))).replace(tzinfo=None)
+    noon_hour = 12 - HST_OFFSET_H
+    noon_utc = Time(f"{date_str} {noon_hour:02d}:00:00")
+    horizon = config['twilight']['horizon_deg'] * u.deg
+    t = observer.sun_set_time(noon_utc, which='nearest', horizon=horizon)
+    return t.to_datetime(timezone=timezone(timedelta(hours=HST_OFFSET_H))).replace(tzinfo=None)
 
 def calc_twilight_beg_hst(date_str: str) -> datetime:
     observer = Observer(location=SUBARU)
-    noon_utc = Time(f"{date_str} 22:00:00")
-    t = observer.sun_rise_time(noon_utc, which='next', horizon=-18*u.deg)
-    return t.to_datetime(timezone=datetime.timezone(datetime.timedelta(hours=HST_OFFSET_H))).replace(tzinfo=None)
+    noon_hour = 12 - HST_OFFSET_H
+    noon_utc = Time(f"{date_str} {noon_hour:02d}:00:00")
+    horizon = config['twilight']['horizon_deg'] * u.deg
+    t = observer.sun_rise_time(noon_utc, which='next', horizon=horizon)
+    return t.to_datetime(timezone=timezone(timedelta(hours=HST_OFFSET_H))).replace(tzinfo=None)
+
 
 
 # ============================================================

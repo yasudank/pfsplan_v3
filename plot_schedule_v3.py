@@ -13,10 +13,16 @@ from matplotlib.colors import LinearSegmentedColormap
 import warnings
 import json
 
-from obs_utils import setup_observer, read_targets, read_obsdates, read_priorities, read_targets_from_ppcList
+from obs_utils import setup_observer, read_targets, read_obsdates, read_priorities, read_targets_from_ppcList, load_config
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings('ignore')
+
+config = load_config()
+TWILIGHT_HORIZON = config['twilight']['horizon_deg']
+ROTATOR_MIN = config['constraints']['rotator_min']
+ROTATOR_MAX = config['constraints']['rotator_max']
+
 
 def load_schedule_from_json_and_npz(json_path, npz_path, observer):
     """
@@ -187,10 +193,10 @@ def plot_altitude_time(schedule, nights, observer, target_colors=None):
         alphas = np.zeros_like(sun_alt)
         
         mask_day = sun_alt >= 0
-        mask_twilight = (sun_alt < 0) & (sun_alt > -18)
+        mask_twilight = (sun_alt < 0) & (sun_alt > TWILIGHT_HORIZON)
         
         alphas[mask_day] = max_alpha
-        alphas[mask_twilight] = max_alpha * (sun_alt[mask_twilight] + 18) / 18.0
+        alphas[mask_twilight] = max_alpha * (sun_alt[mask_twilight] - TWILIGHT_HORIZON) / (-TWILIGHT_HORIZON)
         
         img_data[:, :, 3] = alphas
         
@@ -297,10 +303,10 @@ def plot_rotator_angle_time(schedule, nights, observer, target_colors=None):
         alphas = np.zeros_like(sun_alt)
         
         mask_day = sun_alt >= 0
-        mask_twilight = (sun_alt < 0) & (sun_alt > -18)
+        mask_twilight = (sun_alt < 0) & (sun_alt > TWILIGHT_HORIZON)
         
         alphas[mask_day] = max_alpha
-        alphas[mask_twilight] = max_alpha * (sun_alt[mask_twilight] + 18) / 18.0
+        alphas[mask_twilight] = max_alpha * (sun_alt[mask_twilight] - TWILIGHT_HORIZON) / (-TWILIGHT_HORIZON)
         
         img_data[:, :, 3] = alphas
         
@@ -332,9 +338,9 @@ def plot_rotator_angle_time(schedule, nights, observer, target_colors=None):
         
         ax.set_xlim(xlim_start, xlim_end)
         
-        # Warning zone for rotator limits (-174, 174)
-        ax.fill_between([xlim_start, xlim_end], -180, -174, color='red', alpha=0.15, zorder=0)
-        ax.fill_between([xlim_start, xlim_end], 174, 180, color='red', alpha=0.15, zorder=0)
+        # Warning zone for rotator limits
+        ax.fill_between([xlim_start, xlim_end], -180, ROTATOR_MIN, color='red', alpha=0.15, zorder=0)
+        ax.fill_between([xlim_start, xlim_end], ROTATOR_MAX, 180, color='red', alpha=0.15, zorder=0)
 
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
         

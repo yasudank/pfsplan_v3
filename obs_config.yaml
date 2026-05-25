@@ -1,0 +1,54 @@
+# Global configuration file for Subaru telescope and PFS scheduler
+
+# Telescope Location Settings
+location:
+  name: "Subaru"
+  timezone: "US/Hawaii"
+  hst_offset_hours: -10
+
+# Twilight settings
+twilight:
+  horizon_deg: -18.0
+
+# General scheduling parameters
+scheduling:
+  split_margin_minutes: 5
+  slot_duration_minutes: 20
+  min_overhead_min: 5
+  manual_readout_min: 15
+
+# Observational constraints for target validation & report highlighting
+constraints:
+  max_airmass: 1.6
+  max_airmass_relaxed: 1.85
+  min_altitude: 32.5
+  max_altitude: 75.0
+  min_teff: 0.6
+  rotator_min: -174.0
+  rotator_max: 174.0
+  min_moon_sep: 20.0
+  max_moon_ill: 1.0
+  max_moon_alt: 90.0
+  max_relaxed_count: 8   # Max frames that can use relaxed airmass constraint in a night
+
+# Telescope Slew Rates (degrees per second)
+slew:
+  speed_az: 0.5
+  speed_el: 0.5
+  speed_rot: 1.5
+
+# Simulated Annealing scheduler hyperparameters & weights
+scheduler:
+  sa_t0: 500.0
+  sa_alpha: 0.99999
+  sa_iterations: 1000000
+  sa_t_min: 0.5
+  weight_hard: 1000000.0
+  weight_split: 1000.0
+  weight_priority_base: 100.0
+  weight_teff: 100.0
+  weight_conn: 0.0
+  weight_empty: 5000.0
+  weight_slew: 5.0
+  max_priority: 4
+  n_slots_per_target: 2

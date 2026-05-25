@@ -19,6 +19,8 @@ import matplotlib.patches as mpatches
 from pathlib import Path
 from datetime import datetime, timedelta
 from numba import njit
+from obs_utils import load_config
+
 
 OBSDIR = Path(__file__).parent
 VIS_MAP_FILE = OBSDIR / "vis_map.npz"
@@ -27,25 +29,33 @@ OUTPUT_JSON = OBSDIR / "schedule_result.json"
 OUTPUT_PLOT = OBSDIR / "schedule_plot.png"
 
 # ============================================================
-# スケジューリング定数
+# 設定読み込みと定数
 # ============================================================
-N_SLOTS_PER_TARGET = 2
+config = load_config()
+
+N_SLOTS_PER_TARGET = config['scheduler']['n_slots_per_target']
 
 # SA ハイパーパラメーター
-T0 = 500.0
-ALPHA = 0.99999
-N_ITER = 1_000_000
-T_MIN = 0.5
+T0 = config['scheduler']['sa_t0']
+ALPHA = config['scheduler']['sa_alpha']
+N_ITER = config['scheduler']['sa_iterations']
+T_MIN = config['scheduler']['sa_t_min']
 
 # スコア重み (Numbaコンパイラに定数として伝えるためグローバルに定義)
-W_HARD = 1_000_000.0
-W_SPLIT = 1000.0
-W_PRIORITY_BASE = 100.0
-W_TEFF = 100.0
-W_CONN = 0.0
-W_EMPTY = 5000.0
-W_SLEW = 5.0  # スルー時間に対する直接的なペナルティ
-MAX_PRIORITY = 4
+W_HARD = config['scheduler']['weight_hard']
+W_SPLIT = config['scheduler']['weight_split']
+W_PRIORITY_BASE = config['scheduler']['weight_priority_base']
+W_TEFF = config['scheduler']['weight_teff']
+W_CONN = config['scheduler']['weight_conn']
+W_EMPTY = config['scheduler']['weight_empty']
+W_SLEW = config['scheduler']['weight_slew']  # スルー時間に対する直接的なペナルティ
+MAX_PRIORITY = config['scheduler']['max_priority']
+
+# 望遠鏡スルー速度
+SLEW_SPEED_AZ = config['slew']['speed_az']
+SLEW_SPEED_EL = config['slew']['speed_el']
+SLEW_SPEED_ROT = config['slew']['speed_rot']
+
 
 # ============================================================
 # データ読み込み
@@ -68,7 +78,8 @@ def calculate_slew_time(alt1: float, az1: float, rot1: float, alt2: float, az2: 
     az_diff = (az2 - az1 + 180.0) % 360.0 - 180.0
     alt_diff = alt2 - alt1
     rot_diff = rot2 - rot1
-    return max(abs(az_diff) / 0.5, abs(alt_diff) / 0.5, abs(rot_diff) / 1.5)
+    return max(abs(az_diff) / SLEW_SPEED_AZ, abs(alt_diff) / SLEW_SPEED_EL, abs(rot_diff) / SLEW_SPEED_ROT)
+
 
 @njit
 def compute_co_components(
