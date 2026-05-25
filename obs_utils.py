@@ -129,6 +129,9 @@ def read_targets(filename, priorities):
     with open(filename, 'r') as f:
         reader = csv.DictReader(f)
         for row in reader:
+            exptime = float(row['ppc_exptime'])
+            if exptime < 900:
+                continue
             ppc_code = row['ppc_code']
             priority = priorities.get(ppc_code, 99)
             coord = SkyCoord(ra=float(row['ppc_ra'])*u.deg, dec=float(row['ppc_dec'])*u.deg)
@@ -136,7 +139,7 @@ def read_targets(filename, priorities):
             targets.append({
                 'id': ppc_code,
                 'target': target,
-                'exptime': float(row['ppc_exptime']),
+                'exptime': exptime,
                 'observed': False,
                 'priority': priority,
                 'ppc_pa': float(row['ppc_pa']) if 'ppc_pa' in row else 0.0
@@ -151,6 +154,9 @@ def read_targets_from_ppcList(filename, priorities):
     targets = []
     table = Table.read(filename, format='ascii.ecsv')
     for row in table:
+        exptime = float(row['ppc_exptime'])
+        if exptime < 900:
+            continue
         ppc_code = row['ppc_code']
         priority = priorities.get(ppc_code, 99)
         coord = SkyCoord(ra=float(row['ppc_ra'])*u.deg, dec=float(row['ppc_dec'])*u.deg)
@@ -158,7 +164,7 @@ def read_targets_from_ppcList(filename, priorities):
         targets.append({
             'id': ppc_code,
             'target': target,
-            'exptime': float(row['ppc_exptime']),
+            'exptime': exptime,
             'observed': False,
             'priority': priority,
             'ppc_pa': float(row['ppc_pa']) if 'ppc_pa' in table.colnames else 0.0

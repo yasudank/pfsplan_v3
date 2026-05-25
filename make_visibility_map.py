@@ -279,6 +279,8 @@ def load_targets(targets_dir: Path) -> Table:
         if not ecsv_file.exists():
             continue
         t = Table.read(ecsv_file)
+        if "ppc_exptime" in t.colnames:
+            t = t[t["ppc_exptime"] >= 900]
         t["category"] = cat_dir.name
         tables.append(t)
         print(f"  [{cat_dir.name}] {len(t)} targets")
