@@ -62,8 +62,7 @@ def load_config(filename='obs_config.yaml'):
             'weight_conn': 0.0,
             'weight_empty': 5000.0,
             'weight_slew': 5.0,
-            'max_priority': 4,
-            'n_slots_per_target': 2
+            'max_priority': 4
         }
     }
     

@@ -33,8 +33,6 @@ OUTPUT_PLOT = OBSDIR / "schedule_plot.png"
 # ============================================================
 config = load_config()
 
-N_SLOTS_PER_TARGET = config['scheduler']['n_slots_per_target']
-
 # SA ハイパーパラメーター
 T0 = config['scheduler']['sa_t0']
 ALPHA = config['scheduler']['sa_alpha']
@@ -314,6 +312,7 @@ def compute_score(
 def greedy_initial_schedule(
     target_priority: np.ndarray,
     target_category_code: np.ndarray,
+    target_n_slots: np.ndarray,
     slot_night_idx: np.ndarray,
     order_pairs_arr: np.ndarray,
     fine_alt: np.ndarray,
@@ -334,10 +333,6 @@ def greedy_initial_schedule(
         ta = order_pairs_arr[idx, 0]
         tb = order_pairs_arr[idx, 1]
         prior_matrix[ta, tb] = True
-
-    target_n_slots = np.zeros(n_targets, dtype=np.int32)
-    for ti in range(n_targets):
-        target_n_slots[ti] = 1 if target_category_code[ti] == 0 else 2
 
     n_nights = len(fine_night_minutes)
 
@@ -451,6 +446,7 @@ def sa_optimize(
     teff_map: np.ndarray,
     target_priority: np.ndarray,
     target_category_code: np.ndarray,
+    target_n_slots: np.ndarray,
     slot_night_idx: np.ndarray,
     order_pairs_arr: np.ndarray,
     co_adj_matrix: np.ndarray,
@@ -482,10 +478,6 @@ def sa_optimize(
     best_score = current_score
 
     T = T0
-    
-    target_n_slots = np.zeros(n_targets, dtype=np.int32)
-    for ti in range(n_targets):
-        target_n_slots[ti] = 1 if target_category_code[ti] == 0 else 2
 
     valid_blocks = np.zeros(n_slots, dtype=np.int32)
     valid_blocks_count = 0
@@ -537,9 +529,10 @@ def sa_optimize(
                             
                 if ti_slots_count == L:
                     is_valid = True
-                    if L == 2:
-                        if (ti_slots[1] - ti_slots[0] != 1) or (slot_night_idx[ti_slots[0]] != slot_night_idx[ti_slots[1]]):
+                    for idx in range(L - 1):
+                        if (ti_slots[idx+1] - ti_slots[idx] != 1) or (slot_night_idx[ti_slots[idx]] != slot_night_idx[ti_slots[idx+1]]):
                             is_valid = False
+                            break
                     if is_valid:
                         night_idx = slot_night_idx[ti_slots[0]]
                         empty_blocks = np.zeros(n_slots, dtype=np.int32)
@@ -547,16 +540,15 @@ def sa_optimize(
                         s_night_start = night_slots_start[night_idx]
                         s_night_end = night_slots_end[night_idx]
                         
-                        if L == 1:
-                            for s in range(s_night_start, s_night_end):
-                                if schedule[s] < 0:
-                                    empty_blocks[empty_count] = s
-                                    empty_count += 1
-                        elif L == 2:
-                            for s in range(s_night_start, s_night_end - 1):
-                                if schedule[s] < 0 and schedule[s+1] < 0:
-                                    empty_blocks[empty_count] = s
-                                    empty_count += 1
+                        for s in range(s_night_start, s_night_end - L + 1):
+                            block_ok = True
+                            for idx in range(L):
+                                if schedule[s + idx] >= 0:
+                                    block_ok = False
+                                    break
+                            if block_ok:
+                                empty_blocks[empty_count] = s
+                                empty_count += 1
                                     
                         if empty_count > 0:
                             new_start = empty_blocks[np.random.randint(0, empty_count)]
@@ -1185,7 +1177,7 @@ def plot_schedule(
 # ============================================================
 def worker_task(args):
     (
-        worker_id, seed, schedule, vis_map, teff_map, target_priority, target_category_code,
+        worker_id, seed, schedule, vis_map, teff_map, target_priority, target_category_code, target_n_slots,
         slot_night_idx, order_pairs_arr, co_adj_matrix, n_nights, fine_alt, fine_az,
         fine_rot, fine_teff, fine_night_minutes, night_slots_start, night_slots_end, co_indices_arr,
         T0, ALPHA, N_ITER, T_MIN
@@ -1193,7 +1185,7 @@ def worker_task(args):
 
     print(f"  [Worker {worker_id}] Starting SA with seed {seed}...")
     best_sched, best_score = sa_optimize(
-        schedule, vis_map, teff_map, target_priority, target_category_code, slot_night_idx,
+        schedule, vis_map, teff_map, target_priority, target_category_code, target_n_slots, slot_night_idx,
         order_pairs_arr, co_adj_matrix, n_nights, fine_alt, fine_az, fine_rot, fine_teff,
         fine_night_minutes, night_slots_start, night_slots_end, co_indices_arr,
         T0, ALPHA, N_ITER, T_MIN, seed, worker_id
@@ -1320,10 +1312,16 @@ def main():
     fine_teff = data["fine_teff"].astype(np.float64)
     fine_night_minutes = data["fine_night_minutes"].astype(np.int32)
 
+    # target_n_slots の動的計算
+    slot_sec = config['scheduling']['slot_duration_minutes'] * 60
+    target_exptime = data["target_exptime"].astype(np.int32)
+    target_n_slots = np.ceil(target_exptime / slot_sec).astype(np.int32)
+    target_n_slots = np.maximum(target_n_slots, 1)
+
     # 2. 初期解（貪欲法 JIT版）
     print("\n[2] Greedy warm-start (JIT)...")
     schedule = greedy_initial_schedule(
-        target_priority, target_category_code, slot_night_idx, order_pairs_arr,
+        target_priority, target_category_code, target_n_slots, slot_night_idx, order_pairs_arr,
         fine_alt, fine_az, fine_rot, fine_night_minutes, night_slots_start, night_slots_end, priority_order
     )
 
@@ -1331,7 +1329,7 @@ def main():
     print("\n[3] Pre-compiling JIT functions (Warmup)...")
     print("  (Compiling JIT functions first time... please wait a moment)")
     sa_optimize(
-        schedule, vis_map, teff_map, target_priority, target_category_code, slot_night_idx, order_pairs_arr, co_adj_matrix, n_nights,
+        schedule, vis_map, teff_map, target_priority, target_category_code, target_n_slots, slot_night_idx, order_pairs_arr, co_adj_matrix, n_nights,
         fine_alt, fine_az, fine_rot, fine_teff, fine_night_minutes, night_slots_start, night_slots_end, co_indices_arr,
         T0, ALPHA, 1, T_MIN, 42, -1
     )
@@ -1344,7 +1342,7 @@ def main():
     for w_id in range(args_cli.jobs):
         w_seed = args_cli.seed + w_id
         worker_args.append((
-            w_id, w_seed, schedule, vis_map, teff_map, target_priority, target_category_code,
+            w_id, w_seed, schedule, vis_map, teff_map, target_priority, target_category_code, target_n_slots,
             slot_night_idx, order_pairs_arr, co_adj_matrix, n_nights, fine_alt, fine_az,
             fine_rot, fine_teff, fine_night_minutes, night_slots_start, night_slots_end, co_indices_arr,
             T0, ALPHA, args_cli.iter, T_MIN

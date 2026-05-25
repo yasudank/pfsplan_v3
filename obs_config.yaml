@@ -2,53 +2,53 @@
 
 # Telescope Location Settings
 location:
-  name: "Subaru"
-  timezone: "US/Hawaii"
-  hst_offset_hours: -10
+  name: "Subaru"               # Telescope name for site lookup
+  timezone: "US/Hawaii"        # Local timezone name for the observatory
+  hst_offset_hours: -10        # Time offset in hours from UTC to local HST time
 
-# Twilight settings
+# Twilight Settings
 twilight:
-  horizon_deg: -18.0
+  horizon_deg: -18.0           # Horizon altitude in degrees defining astronomical twilight
 
-# General scheduling parameters
+# General Scheduling Parameters
 scheduling:
-  split_margin_minutes: 5
-  slot_duration_minutes: 20
-  min_overhead_min: 5
-  manual_readout_min: 15
+  split_margin_minutes: 5      # Buffer time in minutes between programs/night splits
+  slot_duration_minutes: 20    # Duration of each scheduler time slot in minutes
+  min_overhead_min: 5          # Minimum fixed preparation/slew overhead per observation in minutes
+  manual_readout_min: 15       # Exposure duration in minutes for manual target allocations
 
-# Observational constraints for target validation & report highlighting
+# Observational constraints (used for target validation and PDF highlighting)
 constraints:
-  max_airmass: 1.6
-  max_airmass_relaxed: 1.85
-  min_altitude: 32.5
-  max_altitude: 75.0
-  min_teff: 0.6
-  rotator_min: -174.0
-  rotator_max: 174.0
-  min_moon_sep: 20.0
-  max_moon_ill: 1.0
-  max_moon_alt: 90.0
-  max_relaxed_count: 8   # Max frames that can use relaxed airmass constraint in a night
+  max_airmass: 1.6             # Maximum airmass limit (standard condition)
+  max_airmass_relaxed: 1.85    # Maximum airmass limit when relaxed constraints are allowed
+  min_altitude: 32.5           # Minimum altitude limit in degrees
+  max_altitude: 75.0           # Maximum altitude limit in degrees (avoidance zone near zenith)
+  min_teff: 0.6                # Minimum effective exposure time factor (t_eff) allowed for scheduled targets
+  rotator_min: -174.0          # Minimum instrument rotator limit in degrees
+  rotator_max: 174.0           # Maximum instrument rotator limit in degrees
+  min_moon_sep: 20.0           # Minimum angular separation from the Moon in degrees
+  max_moon_ill: 1.0            # Maximum Moon illumination fraction (0.0=New Moon, 1.0=Full Moon)
+  max_moon_alt: 90.0           # Maximum Moon altitude in degrees
+  max_relaxed_count: 8         # Maximum number of frames that can use relaxed airmass constraint in a single night
 
-# Telescope Slew Rates (degrees per second)
+# Telescope and rotator slew speeds (degrees per second)
 slew:
-  speed_az: 0.5
-  speed_el: 0.5
-  speed_rot: 1.5
+  speed_az: 0.5                # Telescope drive speed in Azimuth
+  speed_el: 0.5                # Telescope drive speed in Elevation
+  speed_rot: 1.5               # Instrument rotator speed
 
-# Simulated Annealing scheduler hyperparameters & weights
+# Simulated Annealing (SA) hyperparameters and evaluation weights
 scheduler:
-  sa_t0: 500.0
-  sa_alpha: 0.99999
-  sa_iterations: 1000000
-  sa_t_min: 0.5
-  weight_hard: 1000000.0
-  weight_split: 1000.0
-  weight_priority_base: 100.0
-  weight_teff: 100.0
-  weight_conn: 0.0
-  weight_empty: 5000.0
-  weight_slew: 5.0
-  max_priority: 4
-  n_slots_per_target: 2
+  sa_t0: 500.0                 # Initial SA temperature
+  sa_alpha: 0.99999            # SA cooling rate (temperature decay factor)
+  sa_iterations: 1000000       # Number of iterations/loops per SA run
+  sa_t_min: 0.5                # Final minimum temperature for stopping SA
+  weight_hard: 1000000.0       # Penalty weight for physical/hard constraint violations (altitude, rotator limits, etc.)
+  weight_split: 1000.0         # Penalty weight for program night boundary overlaps
+  weight_priority_base: 100.0  # Base weight for scientific priority rewards
+  weight_teff: 100.0           # Reward weight for effective exposure time factor (t_eff)
+  weight_conn: 0.0             # Reward weight for consecutive slots of the same target (0.0 to disable)
+  weight_empty: 5000.0         # Penalty weight for empty/idle slots
+  weight_slew: 5.0             # Direct penalty weight for telescope slew times
+  max_priority: 4              # Maximum scientific priority value considered by the scheduler
+
