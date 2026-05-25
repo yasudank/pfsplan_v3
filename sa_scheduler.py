@@ -895,8 +895,36 @@ def format_schedule_text(schedule: np.ndarray, data: dict) -> str:
         lines.append(col_hdr)
         lines.append(f"  {'─'*3}  {'─'*11}  {'─'*8}  {'─'*8}  {'─'*8}  {'─'*5}  {'─'*8}  {'─'*30}")
 
-        accumulated_slew_delay = 0.0
-        last_target = -1
+        # Precompute slew times and accumulate slew delay
+        slew_secs = np.zeros(n_slots_n, dtype=np.float64)
+        accumulated_slew_delays = np.zeros(n_slots_n, dtype=np.float64)
+
+        accum_delay = 0.0
+        last_tgt = -1
+        for s in range(n_slots_n):
+            si = slot_start + s
+            ti = schedule[si]
+            if ti >= 0:
+                if last_tgt >= 0 and ti != last_tgt:
+                    m1 = (s - 1) * 20
+                    m2 = s * 20
+                    alt1 = fine_alt[last_tgt, ni, m1]
+                    az1 = fine_az[last_tgt, ni, m1]
+                    rot1 = fine_rot[last_tgt, ni, m1]
+
+                    alt2 = fine_alt[ti, ni, m2]
+                    az2 = fine_az[ti, ni, m2]
+                    rot2 = fine_rot[ti, ni, m2]
+
+                    slew_val = calculate_slew_time(alt1, az1, rot1, alt2, az2, rot2)
+                    accum_delay += slew_val
+                    slew_secs[s - 1] = slew_val
+                accumulated_slew_delays[s] = accum_delay
+                last_tgt = ti
+            else:
+                accum_delay = max(0.0, accum_delay - 1200.0)
+                accumulated_slew_delays[s] = accum_delay
+                last_tgt = -1
 
         for s in range(n_slots_n):
             si = slot_start + s
@@ -905,30 +933,16 @@ def format_schedule_text(schedule: np.ndarray, data: dict) -> str:
             t_utc = datetime.strptime(str(slot_times_iso[si])[:16], "%Y-%m-%dT%H:%M")
             t_hst_base = t_utc - timedelta(hours=10)
 
+            accumulated_slew_delay = accumulated_slew_delays[s]
+            slew_sec = slew_secs[s]
+
             if ti < 0:
-                accumulated_slew_delay = max(0.0, accumulated_slew_delay - 1200.0)
-                last_target = -1
                 time_str = t_hst_base.strftime("%H:%M")
+                slew_str = f"{slew_sec:.0f}s" if slew_sec > 0 else "---"
                 lines.append(
-                    f"  {s+1:3d}  {time_str:>11}  {'---':^8}  {'---':>8}  {'---':>8}  {'---':>5}  {'---':^8}  {'(empty)':<30}"
+                    f"  {s+1:3d}  {time_str:>11}  {'---':^8}  {'---':>8}  {'---':>8}  {slew_str:>5}  {'---':^8}  {'(empty)':<30}"
                 )
             else:
-                slew_sec = 0.0
-                if last_target >= 0 and ti != last_target:
-                    m1 = (s - 1) * 20
-                    m2 = s * 20
-                    
-                    alt1 = fine_alt[last_target, ni, m1]
-                    az1 = fine_az[last_target, ni, m1]
-                    rot1 = fine_rot[last_target, ni, m1]
-                    
-                    alt2 = fine_alt[ti, ni, m2]
-                    az2 = fine_az[ti, ni, m2]
-                    rot2 = fine_rot[ti, ni, m2]
-                    
-                    slew_sec = calculate_slew_time(alt1, az1, rot1, alt2, az2, rot2)
-                    accumulated_slew_delay += slew_sec
-
                 actual_start_hst = t_hst_base + timedelta(seconds=float(accumulated_slew_delay))
                 actual_end_hst = actual_start_hst + timedelta(minutes=15)
                 time_str = f"{actual_start_hst.strftime('%H:%M')}-{actual_end_hst.strftime('%H:%M')}"
@@ -947,7 +961,7 @@ def format_schedule_text(schedule: np.ndarray, data: dict) -> str:
                 else:
                     alts = fine_alt[ti, ni, start_min : exp_end_min + 1]
                     rots = fine_rot[ti, ni, start_min : exp_end_min + 1]
-                    
+
                     is_visible_alt = np.all(alts >= 32.5) and np.all(alts <= 75.0)
                     is_visible_rot = np.all(rots >= -174.0) and np.all(rots <= 174.0)
                     r_start = rots[0]
@@ -975,7 +989,6 @@ def format_schedule_text(schedule: np.ndarray, data: dict) -> str:
                 lines.append(
                     f"  {s+1:3d}  {time_str:>11}  {cat:^8}  {pri:>8}  {teff_val:>8.2f}  {slew_str:>5}  {status:^8}  {code:<30}"
                 )
-                last_target = ti
 
         slot_start += n_slots_n
 
