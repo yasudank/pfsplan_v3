@@ -51,4 +51,6 @@ scheduler:
   weight_empty: 5000.0         # Penalty weight for empty/idle slots
   weight_slew: 5.0             # Direct penalty weight for telescope slew times
   max_priority: 4              # Maximum scientific priority value considered by the scheduler
+  max_overtime_minutes: 10     # Maximum allowed observation extension beyond night length in minutes
+  weight_overtime: 1000.0      # Penalty weight per minute of overtime extension
 

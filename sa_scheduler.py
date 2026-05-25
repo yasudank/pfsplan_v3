@@ -48,6 +48,8 @@ W_CONN = config['scheduler']['weight_conn']
 W_EMPTY = config['scheduler']['weight_empty']
 W_SLEW = config['scheduler']['weight_slew']  # スルー時間に対する直接的なペナルティ
 MAX_PRIORITY = config['scheduler']['max_priority']
+MAX_OVERTIME_MIN = config['scheduler']['max_overtime_minutes']
+W_OVERTIME = config['scheduler']['weight_overtime']
 
 # 望遠鏡スルー速度
 SLEW_SPEED_AZ = config['slew']['speed_az']
@@ -139,6 +141,7 @@ def compute_score(
     hard_violations = 0
     teff_sum = 0.0
     total_slew_time = 0.0
+    total_overtime = 0
 
     for d in range(n_nights):
         s_start = night_slots_start[d]
@@ -182,46 +185,47 @@ def compute_score(
             exp_end_min = int((start_sec + 900.0) // 60) # 15分露出
 
             night_len = fine_night_minutes[d]
+            overtime = 0
             if exp_end_min >= night_len:
-                # 夜の終了時間を超過
+                overtime = exp_end_min - night_len + 1
+
+            if overtime > MAX_OVERTIME_MIN:
                 hard_violations += 1
             else:
-                # 露出時間帯での高度・ロテーター制約チェック (純粋Pythonループで早期リターン)
                 is_visible = True
-                
-                # 高度チェック
                 for m in range(start_min, exp_end_min + 1):
-                    val = fine_alt[ti, d, m]
+                    m_clamped = min(m, night_len - 1)
+                    val = fine_alt[ti, d, m_clamped]
                     if val < 32.5 or val > 75.0:
                         is_visible = False
                         break
                 
                 if is_visible:
-                    # ロテーターチェック
                     for m in range(start_min, exp_end_min + 1):
-                        val = fine_rot[ti, d, m]
+                        m_clamped = min(m, night_len - 1)
+                        val = fine_rot[ti, d, m_clamped]
                         if val < -174.0 or val > 174.0:
                             is_visible = False
                             break
                             
                 if is_visible:
-                    # 180度またぎチェック
-                    r_start = fine_rot[ti, d, start_min]
-                    r_end = fine_rot[ti, d, exp_end_min]
+                    r_start = fine_rot[ti, d, min(start_min, night_len - 1)]
+                    r_end = fine_rot[ti, d, min(exp_end_min, night_len - 1)]
                     if (r_start * r_end < 0) and (abs(r_start) + abs(r_end) > 180.0):
                         is_visible = False
 
                 if is_visible:
-                    # 正常観測: teff の平均
                     teff_sum_val = 0.0
                     for m in range(start_min, exp_end_min + 1):
-                        teff_sum_val += fine_teff[ti, d, m]
+                        m_clamped = min(m, night_len - 1)
+                        teff_sum_val += fine_teff[ti, d, m_clamped]
                     teff_val = teff_sum_val / (exp_end_min - start_min + 1)
                     
                     teff_sum += teff_val
                     slot_success[s] = True
                     if start_slot[ti] < 0:
                         start_slot[ti] = s
+                    total_overtime += overtime
                 else:
                     hard_violations += 1
 
@@ -282,6 +286,7 @@ def compute_score(
     score -= W_SPLIT * split_penalties
     score += W_TEFF * teff_sum
     score -= W_SLEW * total_slew_time  # 合計スルー時間を減点
+    score -= W_OVERTIME * total_overtime
 
     # 空きスロットペナルティ
     empty_slots_count = 0
@@ -949,18 +954,31 @@ def format_schedule_text(schedule: np.ndarray, data: dict) -> str:
                 night_len = fine_night_minutes[ni]
                 status = "OK"
                 teff_val = 0.0
-
+                overtime = 0
                 if exp_end_min >= night_len:
+                    overtime = exp_end_min - night_len + 1
+
+                if overtime > MAX_OVERTIME_MIN:
                     status = "EXPIRED"
                     hard_violations_count += 1
                 else:
-                    alts = fine_alt[ti, ni, start_min : exp_end_min + 1]
-                    rots = fine_rot[ti, ni, start_min : exp_end_min + 1]
-
-                    is_visible_alt = np.all(alts >= 32.5) and np.all(alts <= 75.0)
-                    is_visible_rot = np.all(rots >= -174.0) and np.all(rots <= 174.0)
-                    r_start = rots[0]
-                    r_end = rots[-1]
+                    is_visible_alt = True
+                    is_visible_rot = True
+                    for m in range(start_min, exp_end_min + 1):
+                        m_clamped = min(m, night_len - 1)
+                        val = fine_alt[ti, ni, m_clamped]
+                        if val < 32.5 or val > 75.0:
+                            is_visible_alt = False
+                            break
+                    if is_visible_alt:
+                        for m in range(start_min, exp_end_min + 1):
+                            m_clamped = min(m, night_len - 1)
+                            val = fine_rot[ti, ni, m_clamped]
+                            if val < -174.0 or val > 174.0:
+                                is_visible_rot = False
+                                break
+                    r_start = fine_rot[ti, ni, min(start_min, night_len - 1)]
+                    r_end = fine_rot[ti, ni, min(exp_end_min, night_len - 1)]
                     cross_180 = (r_start * r_end < 0) and (abs(r_start) + abs(r_end) > 180.0)
 
                     if not is_visible_alt:
@@ -973,8 +991,14 @@ def format_schedule_text(schedule: np.ndarray, data: dict) -> str:
                         status = "WRAP_ERR"
                         hard_violations_count += 1
                     else:
-                        teff_val = np.mean(fine_teff[ti, ni, start_min : exp_end_min + 1])
+                        teff_sum_val = 0.0
+                        for m in range(start_min, exp_end_min + 1):
+                            m_clamped = min(m, night_len - 1)
+                            teff_sum_val += fine_teff[ti, ni, m_clamped]
+                        teff_val = teff_sum_val / (exp_end_min - start_min + 1)
                         actual_teff_total += teff_val
+                        if overtime > 0:
+                            status = "OVERTIME"
 
                 code = str(target_codes[ti])
                 cat = str(target_category[ti])
