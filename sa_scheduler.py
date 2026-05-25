@@ -1199,16 +1199,33 @@ def main():
     parser.add_argument("-j", "--jobs", type=int, default=4, help="Number of parallel jobs to run (default: 4)")
     parser.add_argument("--seed", type=int, default=42, help="Base random seed (default: 42)")
     parser.add_argument("--iter", type=int, default=N_ITER, help=f"Number of SA iterations (default: {N_ITER})")
+    parser.add_argument("-v", "--vis-map", type=str, default=str(VIS_MAP_FILE), help=f"Path to input vis_map.npz (default: {VIS_MAP_FILE.name})")
+    parser.add_argument("-o", "--output-txt", type=str, default=str(OUTPUT_TXT), help=f"Path to output schedule text (default: {OUTPUT_TXT.name})")
+    parser.add_argument("--output-json", type=str, default=str(OUTPUT_JSON), help=f"Path to output schedule JSON (default: {OUTPUT_JSON.name})")
+    parser.add_argument("--output-plot", type=str, default=str(OUTPUT_PLOT), help=f"Path to output schedule plot image (default: {OUTPUT_PLOT.name})")
     args_cli = parser.parse_args()
+
+    vis_map_file = Path(args_cli.vis_map)
+    output_txt = Path(args_cli.output_txt)
+    output_json = Path(args_cli.output_json)
+    output_plot = Path(args_cli.output_plot)
+
+    if not vis_map_file.exists():
+        print(f"Error: input file not found at {vis_map_file}")
+        sys.exit(1)
 
     print("=" * 60)
     print("PFS SA Scheduler (Numba JIT Multiprocessing Version)")
     print(f"  Jobs: {args_cli.jobs}, Base Seed: {args_cli.seed}, Iterations: {args_cli.iter}")
+    print(f"  Input NPZ: {vis_map_file}")
+    print(f"  Output TXT: {output_txt}")
+    print(f"  Output JSON: {output_json}")
+    print(f"  Output Plot: {output_plot}")
     print("=" * 60)
 
     # 1. データ読み込み
-    print("\n[1] Loading vis_map.npz...")
-    data = load_vis_map(VIS_MAP_FILE)
+    print(f"\n[1] Loading {vis_map_file}...")
+    data = load_vis_map(vis_map_file)
     vis_map = data["vis_map"]
     teff_map = data["target_teff"]
     target_priority = data["target_priority"].astype(int)
@@ -1349,10 +1366,10 @@ def main():
     # 4. テキスト出力
     print("\n[4] Writing text schedule...")
     text = format_schedule_text(best_schedule, data)
-    with open(OUTPUT_TXT, "w") as f:
+    with open(output_txt, "w") as f:
         f.write(text)
     print(text)
-    print(f"  Saved: {OUTPUT_TXT}")
+    print(f"  Saved: {output_txt}")
 
     # 5. JSON出力
     # 実際の teff 合計を計算
@@ -1404,13 +1421,13 @@ def main():
         "slot_times_iso": [str(t) for t in data["slot_times_iso"]],
         "score_history": score_history,
     }
-    with open(OUTPUT_JSON, "w") as f:
+    with open(output_json, "w") as f:
         json.dump(result_json, f, indent=2)
-    print(f"  JSON saved: {OUTPUT_JSON}")
+    print(f"  JSON saved: {output_json}")
 
     # 6. ガントチャート
     print("\n[5] Plotting schedule...")
-    plot_schedule(best_schedule, data, score_history, OUTPUT_PLOT)
+    plot_schedule(best_schedule, data, score_history, output_plot)
 
     print("\n" + "=" * 60)
     print("Done!")

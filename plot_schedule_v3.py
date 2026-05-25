@@ -784,6 +784,13 @@ def plot_observation_counts(schedule, all_targets, target_colors=None):
     print("Saved observation_counts.png")
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Plot PFS Schedule and Coverage Plots")
+    parser.add_argument("-o", "--obsdates", type=str, default="obsdates_2026May.txt", help="Path to obsdates text file (default: obsdates_2026May.txt)")
+    parser.add_argument("-v", "--vis-map", type=str, default="vis_map.npz", help="Path to vis_map.npz (default: vis_map.npz)")
+    parser.add_argument("-s", "--schedule", type=str, default="schedule_result.json", help="Path to schedule_result.json (default: schedule_result.json)")
+    args = parser.parse_args()
+
     observer = setup_observer()
     
     # Read priorities first
@@ -805,7 +812,7 @@ def main():
     print(f"Total targets loaded: {len(all_targets)}")
 
     try:
-        schedule = load_schedule_from_json_and_npz('schedule_result.json', 'vis_map.npz', observer)
+        schedule = load_schedule_from_json_and_npz(args.schedule, args.vis_map, observer)
     except Exception as e:
         print(f"Error loading schedule: {e}")
         return
@@ -821,10 +828,10 @@ def main():
     print(f"Loaded {len(schedule)} observations from schedule.")
 
     try:
-        nights = read_obsdates('obsdates_2026May.txt', observer)
-        print(f"Loaded {len(nights)} observation windows.")
+        nights = read_obsdates(args.obsdates, observer)
+        print(f"Loaded {len(nights)} observation windows from {args.obsdates}.")
     except FileNotFoundError:
-        print("Error: Observation dates file 'obsdates_2026May.txt' not found.")
+        print(f"Error: Observation dates file '{args.obsdates}' not found.")
         print("Cannot generate altitude vs time plot.")
         nights = []
 

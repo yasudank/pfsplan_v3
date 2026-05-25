@@ -702,13 +702,31 @@ def plot_visibility_map(
 # ============================================================
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="PFS Visibility Map Generator")
+    parser.add_argument("-o", "--obsdates", type=str, default=str(OBSDATES_FILE), help=f"Path to obsdates file (default: {OBSDATES_FILE.name})")
+    parser.add_argument("-v", "--vis-map", type=str, default=str(OUTPUT_NPZ), help=f"Path to output vis_map.npz (default: {OUTPUT_NPZ.name})")
+    parser.add_argument("-p", "--plot", type=str, default=str(OUTPUT_PLOT), help=f"Path to output plot image (default: {OUTPUT_PLOT.name})")
+    args = parser.parse_args()
+
+    obsdates_file = Path(args.obsdates)
+    output_npz = Path(args.vis_map)
+    output_plot = Path(args.plot)
+
+    if not obsdates_file.exists():
+        print(f"Error: obsdates file not found at {obsdates_file}")
+        sys.exit(1)
+
     print("=" * 60)
     print("PFS Visibility Map Generator")
+    print(f"  Obsdates: {obsdates_file}")
+    print(f"  Output NPZ: {output_npz}")
+    print(f"  Output Plot: {output_plot}")
     print("=" * 60)
 
     # 1. 観測夜の読み込み
     print("\n[1] Loading observation dates...")
-    nights = load_obsdates(OBSDATES_FILE)
+    nights = load_obsdates(obsdates_file)
 
     # 2. 天体カタログの読み込み
     print("[2] Loading target catalogs...")
@@ -722,17 +740,17 @@ def main():
     ) = compute_visibility_map(targets, nights)
 
     # 4. 保存
-    print("\n[4] Saving vis_map.npz...")
+    print(f"\n[4] Saving {output_npz}...")
     save_vis_map(
         vis_map, teff_map, targets, nights, all_slots_utc,
         slot_night_idx, slot_within_night,
         fine_alt, fine_az, fine_rot, fine_teff, fine_night_minutes,
-        OUTPUT_NPZ
+        output_npz
     )
 
     # 5. 可視化
-    print("\n[5] Plotting visibility map...")
-    plot_visibility_map(vis_map, targets, nights, slot_night_idx, OUTPUT_PLOT)
+    print(f"\n[5] Plotting visibility map to {output_plot}...")
+    plot_visibility_map(vis_map, targets, nights, slot_night_idx, output_plot)
 
     # サマリー
     print("\n" + "=" * 60)
@@ -748,8 +766,8 @@ def main():
             print(f"    {cat}: {n} targets")
     print(f"  Mean observability : {vis_map.mean()*100:.1f}%")
     print(f"\nOutputs:")
-    print(f"  {OUTPUT_NPZ}")
-    print(f"  {OUTPUT_PLOT}")
+    print(f"  {output_npz}")
+    print(f"  {output_plot}")
     print("=" * 60)
 
 
