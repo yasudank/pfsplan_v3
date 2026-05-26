@@ -61,6 +61,13 @@ REHEAT_CUTOFF = config['scheduler']['sa_reheat_cutoff']
 POPULATION_PHASES = config['scheduler']['population_phases']
 ELITE_FRACTION = config['scheduler']['elite_fraction']
 
+# カテゴリスロット割合の制約パラメータ
+TARGET_RATIO_CO = config['scheduler'].get('target_ratio_co', 0.20)
+TARGET_RATIO_GA = config['scheduler'].get('target_ratio_ga', 0.60)
+TARGET_RATIO_GE = config['scheduler'].get('target_ratio_ge', 0.20)
+RATIO_TOLERANCE = config['scheduler'].get('target_ratio_tolerance', 0.05)
+W_RATIO_PENALTY = config['scheduler'].get('weight_ratio_penalty', 50000.0)
+
 # 望遠鏡スルー速度
 SLEW_SPEED_AZ = config['slew']['speed_az']
 SLEW_SPEED_EL = config['slew']['speed_el']
@@ -320,6 +327,34 @@ def compute_score(
         for d in range(n_nights):
             total_components += compute_co_components(co_observed_night, co_indices, co_adj_matrix, d, visited)
         score -= W_CONN * total_components
+
+    # 6. カテゴリスロット割合ペナルティ
+    if W_RATIO_PENALTY > 0.0:
+        total_active_slots = 0
+        count_co = 0
+        count_ga = 0
+        count_ge = 0
+        for s in range(n_slots):
+            ti = schedule[s]
+            if ti >= 0 and slot_success[s]:
+                total_active_slots += 1
+                cat_code = target_category_code[ti]
+                if cat_code == 0:
+                    count_co += 1
+                elif cat_code == 1:
+                    count_ga += 1
+                elif cat_code == 2:
+                    count_ge += 1
+        if total_active_slots > 0:
+            ratio_co = count_co / total_active_slots
+            ratio_ga = count_ga / total_active_slots
+            ratio_ge = count_ge / total_active_slots
+
+            diff_co = max(0.0, abs(ratio_co - TARGET_RATIO_CO) - RATIO_TOLERANCE)
+            diff_ga = max(0.0, abs(ratio_ga - TARGET_RATIO_GA) - RATIO_TOLERANCE)
+            diff_ge = max(0.0, abs(ratio_ge - TARGET_RATIO_GE) - RATIO_TOLERANCE)
+
+            score -= (diff_co + diff_ga + diff_ge) * W_RATIO_PENALTY
 
     return score
 
@@ -1362,12 +1397,103 @@ def format_schedule_text(schedule: np.ndarray, data: dict) -> str:
     total_slots = len(schedule)
     occupied = int(np.sum(schedule >= 0))
 
+    # 観測成功したスロットのカテゴリ別集計
+    total_active_slots = 0
+    active_co = 0
+    active_ga = 0
+    active_ge = 0
+
+    # 各夜のスロットの成功状況を再現
+    slot_start_temp2 = 0
+    for ni, n_slots_n in enumerate(night_n_slots):
+        accum_delay = 0.0
+        last_tgt = -1
+        for s in range(n_slots_n):
+            si = slot_start_temp2 + s
+            ti = schedule[si]
+            if ti < 0:
+                accum_delay = max(0.0, accum_delay - 1200.0)
+                last_tgt = -1
+                continue
+
+            if last_tgt >= 0 and ti != last_tgt:
+                m1 = (s - 1) * 20
+                m2 = s * 20
+                t_s = calculate_slew_time(
+                    fine_alt[last_tgt, ni, m1], fine_az[last_tgt, ni, m1], fine_rot[last_tgt, ni, m1],
+                    fine_alt[ti, ni, m2], fine_az[ti, ni, m2], fine_rot[ti, ni, m2]
+                )
+                accum_delay += t_s
+
+            st_sec = s * 1200.0 + accum_delay
+            st_min = int(st_sec // 60)
+            ed_min = int((st_sec + 900.0) // 60)
+            n_len = fine_night_minutes[ni]
+
+            overtime = 0
+            if ed_min >= n_len:
+                overtime = ed_min - n_len + 1
+
+            if overtime <= MAX_OVERTIME_MIN:
+                is_visible = True
+                for m in range(st_min, ed_min + 1):
+                    m_clamped = min(m, n_len - 1)
+                    val = fine_alt[ti, ni, m_clamped]
+                    if val < 32.5 or val > 75.0:
+                        is_visible = False
+                        break
+                if is_visible:
+                    for m in range(st_min, ed_min + 1):
+                        m_clamped = min(m, n_len - 1)
+                        val = fine_rot[ti, ni, m_clamped]
+                        if val < -174.0 or val > 174.0:
+                            is_visible = False
+                            break
+                if is_visible:
+                    r_start = fine_rot[ti, ni, min(st_min, n_len - 1)]
+                    r_end = fine_rot[ti, ni, min(ed_min, n_len - 1)]
+                    if (r_start * r_end < 0) and (abs(r_start) + abs(r_end) > 180.0):
+                        is_visible = False
+
+                if is_visible:
+                    total_active_slots += 1
+                    cat = str(target_category[ti])
+                    if cat == "CO":
+                        active_co += 1
+                    elif cat == "GA":
+                        active_ga += 1
+                    elif cat == "GE":
+                        active_ge += 1
+
+            last_tgt = ti
+        slot_start_temp2 += n_slots_n
+
+    # ペナルティ計算の再現
+    ratio_penalty = 0.0
+    if total_active_slots > 0 and W_RATIO_PENALTY > 0.0:
+        r_co = active_co / total_active_slots
+        r_ga = active_ga / total_active_slots
+        r_ge = active_ge / total_active_slots
+        diff_co = max(0.0, abs(r_co - TARGET_RATIO_CO) - RATIO_TOLERANCE)
+        diff_ga = max(0.0, abs(r_ga - TARGET_RATIO_GA) - RATIO_TOLERANCE)
+        diff_ge = max(0.0, abs(r_ge - TARGET_RATIO_GE) - RATIO_TOLERANCE)
+        ratio_penalty = (diff_co + diff_ga + diff_ge) * W_RATIO_PENALTY
+
     lines.append(f"  Total slots       : {total_slots}")
     lines.append(f"  Occupied slots    : {occupied}  ({occupied/total_slots*100:.1f}%)")
     lines.append(f"  Empty slots       : {total_slots - occupied}")
     lines.append(f"  Hard Violations   : {hard_violations_count}")
     lines.append(f"  Targets observed  : {len(obs_ti_success)} / {len(target_codes)}")
     lines.append(f"  Total t_eff       : {actual_teff_total:.2f}")
+    lines.append("")
+    lines.append("  Active Slot Ratios (Target / Actual):")
+    if total_active_slots > 0:
+        lines.append(f"    CO: {TARGET_RATIO_CO*100:4.1f}%  /  {active_co/total_active_slots*100:4.1f}% ({active_co:3d} slots)")
+        lines.append(f"    GA: {TARGET_RATIO_GA*100:4.1f}%  /  {active_ga/total_active_slots*100:4.1f}% ({active_ga:3d} slots)")
+        lines.append(f"    GE: {TARGET_RATIO_GE*100:4.1f}%  /  {active_ge/total_active_slots*100:4.1f}% ({active_ge:3d} slots)")
+        lines.append(f"    Ratio Penalty   : {ratio_penalty:.1f}")
+    else:
+        lines.append("    No active slots observed.")
     lines.append("")
     for cat in ["CO", "GA", "GE"]:
         cat_total = sum(1 for c in target_category if c == cat)

@@ -71,3 +71,8 @@ pfs_plan_sa.md
 implementation_plan.md
 walkthrough.md
 obsdates_2026May.txt
+
+# ============================================================
+# GUI Editor Backups
+# ============================================================
+backups/

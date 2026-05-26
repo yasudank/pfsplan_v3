@@ -45,7 +45,7 @@ scheduler:
   sa_t_min: 0.5                # Final minimum temperature for stopping SA
   weight_hard: 1000000.0       # Penalty weight for physical/hard constraint violations (altitude, rotator limits, etc.)
   weight_split: 1000.0         # Penalty weight for program night boundary overlaps
-  weight_priority_base: 100.0  # Base weight for scientific priority rewards
+  weight_priority_base: 500.0  # Base weight for scientific priority rewards
   weight_teff: 100.0           # Reward weight for effective exposure time factor (t_eff)
   weight_conn: 0.0             # Reward weight for consecutive slots of the same target (0.0 to disable)
   weight_empty: 5000.0         # Penalty weight for empty/idle slots
@@ -58,4 +58,9 @@ scheduler:
   sa_reheat_cutoff: 0.8        # Stop reheating after this fraction of total iterations
   population_phases: 4         # Number of phases for population-based SA
   elite_fraction: 0.5          # Fraction of top workers whose schedules are kept (rest restart from elite)
+  target_ratio_co: 0.20        # Target slot ratio for CO category
+  target_ratio_ga: 0.60        # Target slot ratio for GA category
+  target_ratio_ge: 0.20        # Target slot ratio for GE category
+  target_ratio_tolerance: 0.05 # Allowed tolerance (+/- 5%)
+  weight_ratio_penalty: 50000.0 # Penalty weight for ratio deviations exceeding tolerance
 

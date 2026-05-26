@@ -1,0 +1,1543 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PFS Observation Schedule Editor</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --bg-color: #0b0b16;
+            --panel-bg: rgba(20, 20, 40, 0.75);
+            --panel-border: rgba(60, 60, 100, 0.4);
+            --text-color: #e2e8f0;
+            --text-muted: #94a3b8;
+            --primary-glow: rgba(124, 77, 255, 0.6);
+            
+            --color-co: #00f0ff;
+            --color-ga: #39ff14;
+            --color-ge: #ff9f00;
+            --color-empty: #2e2e48;
+            
+            --color-co-glow: rgba(0, 240, 255, 0.2);
+            --color-ga-glow: rgba(57, 255, 20, 0.2);
+            --color-ge-glow: rgba(255, 159, 0, 0.2);
+            
+            --color-error: #ff3838;
+            --color-warning: #ffb300;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg-color);
+            background-image: 
+                radial-gradient(at 10% 20%, rgba(26, 21, 60, 0.4) 0px, transparent 50%),
+                radial-gradient(at 90% 80%, rgba(15, 36, 68, 0.4) 0px, transparent 50%);
+            background-attachment: fixed;
+            color: var(--text-color);
+            overflow: hidden;
+            height: 100vh;
+        }
+
+        /* Layout Structure */
+        .app-container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        /* Header block */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 30px;
+            background: rgba(13, 13, 29, 0.85);
+            border-bottom: 1px solid var(--panel-border);
+            backdrop-filter: blur(10px);
+            z-index: 10;
+        }
+
+        .logo-section h1 {
+            font-size: 1.3rem;
+            font-weight: 700;
+            letter-spacing: 2px;
+            background: linear-gradient(90deg, #b388ff, #80d8ff);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-transform: uppercase;
+        }
+
+        .logo-section p {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .metrics-bar {
+            display: flex;
+            gap: 25px;
+        }
+
+        .metric-card {
+            background: rgba(30, 30, 60, 0.4);
+            border: 1px solid var(--panel-border);
+            padding: 6px 16px;
+            border-radius: 8px;
+            text-align: center;
+            min-width: 110px;
+        }
+
+        .metric-card.dirty {
+            border-color: #ffb300;
+            box-shadow: 0 0 10px rgba(255, 179, 0, 0.15);
+        }
+
+        .metric-label {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            letter-spacing: 1px;
+        }
+
+        .metric-value {
+            font-size: 1.1rem;
+            font-weight: 600;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .metric-card.violations {
+            border-color: rgba(255, 56, 56, 0.4);
+        }
+        .metric-card.violations.has-errors {
+            border-color: var(--color-error);
+            background: rgba(255, 56, 56, 0.1);
+            color: var(--color-error);
+            animation: pulse-red 2s infinite;
+        }
+
+        .actions-bar {
+            display: flex;
+            gap: 12px;
+        }
+
+        .btn {
+            font-family: 'Outfit', sans-serif;
+            font-size: 0.85rem;
+            font-weight: 600;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            border: none;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #7c4dff 0%, #651fff 100%);
+            color: white;
+            box-shadow: 0 4px 15px rgba(124, 77, 255, 0.4);
+        }
+        .btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px rgba(124, 77, 255, 0.6);
+        }
+        .btn-primary:disabled {
+            background: #474766;
+            color: var(--text-muted);
+            box-shadow: none;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-secondary {
+            background: rgba(50, 50, 80, 0.6);
+            border: 1px solid var(--panel-border);
+            color: var(--text-color);
+        }
+        .btn-secondary:hover:not(:disabled) {
+            background: rgba(70, 70, 110, 0.8);
+            border-color: rgba(100, 100, 150, 0.6);
+        }
+        .btn-secondary:disabled {
+            color: #555577;
+            cursor: not-allowed;
+        }
+
+        /* Main Workspace split screen */
+        .workspace {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* Timeline Grid Left Panel */
+        .timeline-panel {
+            flex: 1;
+            padding: 20px 30px;
+            overflow: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 30px;
+        }
+
+        .night-section {
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 12px;
+            padding: 20px;
+            backdrop-filter: blur(10px);
+        }
+
+        .night-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            padding-bottom: 10px;
+        }
+
+        .night-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #b388ff;
+        }
+
+        .night-stats {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .slots-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 12px;
+        }
+
+        .slot-card {
+            background: rgba(15, 15, 30, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 8px;
+            padding: 10px 14px;
+            cursor: pointer;
+            position: relative;
+            transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+            user-select: none;
+        }
+
+        .slot-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            width: 4px;
+            border-radius: 4px 0 0 4px;
+            background: var(--color-empty);
+        }
+
+        .slot-card:hover {
+            transform: translateY(-2px);
+            background: rgba(30, 30, 50, 0.8);
+            border-color: rgba(124, 77, 255, 0.4);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        .slot-card.selected {
+            background: rgba(124, 77, 255, 0.15) !important;
+            border-color: #7c4dff !important;
+            box-shadow: 0 0 15px rgba(124, 77, 255, 0.3);
+        }
+        .slot-card.selected::after {
+            content: 'SELECTED';
+            position: absolute;
+            top: -8px;
+            right: 8px;
+            font-size: 0.55rem;
+            background: #7c4dff;
+            color: white;
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+        }
+
+        /* Color bar left border indicator */
+        .slot-card.cat-CO::before { background: var(--color-co); }
+        .slot-card.cat-GA::before { background: var(--color-ga); }
+        .slot-card.cat-GE::before { background: var(--color-ge); }
+
+        .slot-card.cat-CO:hover { box-shadow: 0 4px 12px var(--color-co-glow); }
+        .slot-card.cat-GA:hover { box-shadow: 0 4px 12px var(--color-ga-glow); }
+        .slot-card.cat-GE:hover { box-shadow: 0 4px 12px var(--color-ge-glow); }
+
+        .slot-time {
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+            margin-bottom: 4px;
+        }
+
+        .slot-target-code {
+            font-size: 0.8rem;
+            font-weight: 600;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: #ffffff;
+        }
+
+        .slot-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 6px;
+            font-size: 0.65rem;
+        }
+
+        .slot-badge {
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .slot-badge.badge-CO { background: rgba(0, 240, 255, 0.15); color: var(--color-co); }
+        .slot-badge.badge-GA { background: rgba(57, 255, 20, 0.15); color: var(--color-ga); }
+        .slot-badge.badge-GE { background: rgba(255, 159, 0, 0.15); color: var(--color-ge); }
+        .slot-badge.badge-empty { background: rgba(255, 255, 255, 0.05); color: var(--text-muted); }
+
+        .slot-priority {
+            color: var(--text-muted);
+        }
+
+        /* Status Flags in slots */
+        .slot-card.has-error {
+            border-color: var(--color-error) !important;
+            animation: border-pulse-red 2s infinite;
+        }
+        .slot-card.has-warning {
+            border-color: var(--color-warning) !important;
+        }
+
+        .error-dot {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--color-error);
+            box-shadow: 0 0 6px var(--color-error);
+        }
+        .warning-dot {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--color-warning);
+            box-shadow: 0 0 6px var(--color-warning);
+        }
+
+        /* Target Catalog Sidebar Panel Right */
+        .catalog-panel {
+            width: 380px;
+            background: rgba(13, 13, 29, 0.85);
+            border-left: 1px solid var(--panel-border);
+            display: flex;
+            flex-direction: column;
+            backdrop-filter: blur(10px);
+        }
+
+        .catalog-header {
+            padding: 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .catalog-header h2 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: #80d8ff;
+        }
+
+        .search-box {
+            position: relative;
+            margin-bottom: 12px;
+        }
+
+        .search-input {
+            width: 100%;
+            background: rgba(20, 20, 40, 0.6);
+            border: 1px solid var(--panel-border);
+            border-radius: 6px;
+            padding: 8px 12px;
+            color: white;
+            font-size: 0.85rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .search-input:focus {
+            border-color: #7c4dff;
+        }
+
+        .filters-row {
+            display: flex;
+            gap: 8px;
+        }
+
+        .filter-select {
+            flex: 1;
+            background: rgba(20, 20, 40, 0.6);
+            border: 1px solid var(--panel-border);
+            border-radius: 6px;
+            padding: 6px;
+            color: var(--text-color);
+            font-size: 0.75rem;
+            outline: none;
+            cursor: pointer;
+        }
+
+        .catalog-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px 20px;
+        }
+
+        .catalog-item {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 6px;
+            padding: 8px 12px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            position: relative;
+        }
+        .catalog-item:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(128, 216, 255, 0.4);
+            transform: translateX(-2px);
+        }
+        .catalog-item.selected {
+            background: rgba(128, 216, 255, 0.1);
+            border-color: #80d8ff;
+        }
+
+        .catalog-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 4px;
+        }
+
+        .catalog-item-code {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: #ffffff;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .catalog-item-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.65rem;
+            color: var(--text-muted);
+        }
+
+        .catalog-item-details {
+            margin-top: 4px;
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            display: flex;
+            gap: 10px;
+        }
+
+        /* Detail Inspector Panel at bottom of sidebar */
+        .inspector-panel {
+            padding: 20px;
+            background: rgba(20, 20, 45, 0.9);
+            border-top: 1px solid var(--panel-border);
+            height: 220px;
+            min-height: 100px;
+            max-height: 600px;
+            overflow-y: auto;
+            flex-shrink: 0;
+        }
+
+        /* Resizer bar styling */
+        .resizer {
+            height: 8px;
+            background: rgba(60, 60, 100, 0.25);
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            border-bottom: 1px solid rgba(0, 0, 0, 0.3);
+            cursor: ns-resize;
+            transition: background 0.2s, box-shadow 0.2s;
+            user-select: none;
+            flex-shrink: 0;
+            position: relative;
+        }
+        .resizer::after {
+            content: '';
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 30px;
+            height: 2px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 1px;
+            box-shadow: 0 2px 0 rgba(255, 255, 255, 0.2);
+        }
+        .resizer:hover, .resizer.dragging {
+            background: #7c4dff;
+            box-shadow: 0 0 10px rgba(124, 77, 255, 0.5);
+        }
+
+        .inspector-header {
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #b388ff;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            padding-bottom: 4px;
+        }
+
+        .inspector-body {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+
+        .inspector-error-item {
+            color: #ff6b6b;
+            margin-top: 6px;
+            padding-left: 12px;
+            position: relative;
+        }
+        .inspector-error-item::before {
+            content: '●';
+            color: var(--color-error);
+            position: absolute;
+            left: 0;
+            font-size: 0.6rem;
+            top: 2px;
+        }
+        .inspector-warning-item {
+            color: #ffd166;
+            margin-top: 6px;
+            padding-left: 12px;
+            position: relative;
+        }
+        .inspector-warning-item::before {
+            content: '▲';
+            color: var(--color-warning);
+            position: absolute;
+            left: 0;
+            font-size: 0.6rem;
+            top: 2px;
+        }
+
+        /* Toast notifications styling */
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: #1e1e38;
+            border: 1px solid #7c4dff;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            padding: 12px 24px;
+            border-radius: 8px;
+            color: white;
+            font-size: 0.85rem;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+            pointer-events: none;
+        }
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .toast.success {
+            border-color: #39ff14;
+            box-shadow: 0 10px 30px rgba(57, 255, 20, 0.1);
+        }
+        .toast.error {
+            border-color: #ff3838;
+            box-shadow: 0 10px 30px rgba(255, 56, 56, 0.1);
+        }
+
+        /* Keyframes Animations */
+        @keyframes pulse-red {
+            0% { box-shadow: 0 0 0 0 rgba(255, 56, 56, 0.4); }
+            70% { box-shadow: 0 0 0 8px rgba(255, 56, 56, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(255, 56, 56, 0); }
+        }
+
+        @keyframes border-pulse-red {
+            0% { border-color: rgba(255, 56, 56, 0.5); }
+            50% { border-color: rgba(255, 56, 56, 1); box-shadow: 0 0 8px rgba(255, 56, 56, 0.2); }
+            100% { border-color: rgba(255, 56, 56, 0.5); }
+        }
+
+        /* Scrollbar customizing */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.02);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .loader {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: var(--bg-color);
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            transition: opacity 0.5s ease;
+        }
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 3px solid rgba(124, 77, 255, 0.2);
+            border-top: 3px solid #7c4dff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .target-indicator {
+            font-size: 0.6rem;
+            padding: 1px 4px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+            color: #80d8ff;
+        }
+        
+        .empty-btn-container {
+            display: flex;
+            justify-content: flex-end;
+            margin-bottom: 10px;
+        }
+        
+        .timeline-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 12px;
+            table-layout: fixed;
+        }
+        .timeline-table th {
+            background: rgba(30, 30, 60, 0.6);
+            border: 1px solid var(--panel-border);
+            color: #b388ff;
+            padding: 12px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.85rem;
+            text-align: center;
+            line-height: 1.3;
+        }
+        .timeline-table td {
+            vertical-align: middle;
+        }
+        .time-column-header {
+            width: 90px;
+        }
+        .time-cell {
+            background: rgba(30, 30, 60, 0.4);
+            border: 1px solid var(--panel-border);
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            text-align: center;
+            padding: 10px;
+            border-radius: 6px;
+            font-weight: 700;
+        }
+        .slot-placeholder {
+            height: 72px;
+            background: rgba(255, 255, 255, 0.01);
+            border: 1px dashed rgba(255, 255, 255, 0.03);
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Loading Screen -->
+    <div id="loader" class="loader">
+        <div class="spinner"></div>
+        <p style="font-size: 0.9rem; letter-spacing: 1px; color: var(--text-muted);">LOADING PFS SCHEDULE DATA...</p>
+    </div>
+
+    <div class="app-container">
+        
+        <!-- Header -->
+        <header>
+            <div class="logo-section">
+                <h1>PFS Schedule Editor</h1>
+                <p>SUBARU TELESCOPE OBSERVATION PLANNER</p>
+            </div>
+            
+            <!-- Live Metrics Bar -->
+            <div class="metrics-bar">
+                <div class="metric-card" id="metric-score-card">
+                    <div class="metric-label">Total Score</div>
+                    <div class="metric-value" id="metric-score">-</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Total t_eff</div>
+                    <div class="metric-value" id="metric-teff">-</div>
+                </div>
+                <div class="metric-card violations" id="metric-violations-card">
+                    <div class="metric-label">Hard Violations</div>
+                    <div class="metric-value" id="metric-violations">0</div>
+                </div>
+            </div>
+
+            <!-- Actions buttons -->
+            <div class="actions-bar">
+                <button class="btn btn-secondary" id="btn-revert" disabled>Revert Changes</button>
+                <button class="btn btn-primary" id="btn-save" disabled>Save Schedule</button>
+            </div>
+        </header>
+
+        <!-- Main Workspace -->
+        <div class="workspace">
+            
+            <!-- Timeline (Left) -->
+            <div class="timeline-panel" id="timeline-container">
+                <!-- Night sections will be dynamically injected here -->
+            </div>
+
+            <!-- Catalog Sidebar (Right) -->
+            <div class="catalog-panel">
+                <div class="catalog-header">
+                    <h2>Target Catalog</h2>
+                    <div class="search-box">
+                        <input type="text" class="search-input" id="search-input" placeholder="Search target code...">
+                    </div>
+                    <div class="filters-row">
+                        <select class="filter-select" id="filter-category">
+                            <option value="ALL">Category: ALL</option>
+                            <option value="CO">CO</option>
+                            <option value="GA">GA</option>
+                            <option value="GE">GE</option>
+                        </select>
+                        <select class="filter-select" id="filter-priority">
+                            <option value="ALL">Priority: ALL</option>
+                            <option value="1">Priority: 1</option>
+                            <option value="2">Priority: 2</option>
+                            <option value="3">Priority: 3</option>
+                            <option value="4">Priority: 4</option>
+                            <option value="9">Priority: 9</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Catalog list wrapper -->
+                <div class="catalog-list" id="catalog-list">
+                    <!-- Catalog list items injected dynamically -->
+                </div>
+
+                <!-- Resizer bar -->
+                <div class="resizer" id="resizer"></div>
+
+                <!-- Inspector panel (Bottom right) -->
+                <div class="inspector-panel">
+                    <div class="inspector-header" id="inspector-header">Inspector</div>
+                    <div class="inspector-body" id="inspector-body">
+                        Select a slot on the timeline to inspect constraint violations and target details.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast">
+        <span id="toast-message">Schedule updated successfully.</span>
+    </div>
+
+    <!-- JavaScript Logic -->
+    <script>
+        // App State
+        let catalog = [];
+        let slots = [];
+        let originalSchedule = [];
+        let currentSchedule = [];
+        let nightNames = [];
+        let nightNSlots = [];
+        let slotErrors = {};
+        let actualTimes = {};
+        
+        let selectedSlotIndex = null;
+        let selectedCatalogIndex = null;
+        
+        let isDirty = false;
+
+        // Elements
+        const elLoader = document.getElementById('loader');
+        const elTimeline = document.getElementById('timeline-container');
+        const elCatalogList = document.getElementById('catalog-list');
+        const elSearchInput = document.getElementById('search-input');
+        const elFilterCategory = document.getElementById('filter-category');
+        const elFilterPriority = document.getElementById('filter-priority');
+        
+        const elMetricScore = document.getElementById('metric-score');
+        const elMetricTeff = document.getElementById('metric-teff');
+        const elMetricViolations = document.getElementById('metric-violations');
+        const elMetricScoreCard = document.getElementById('metric-score-card');
+        const elMetricViolationsCard = document.getElementById('metric-violations-card');
+        
+        const elBtnSave = document.getElementById('btn-save');
+        const elBtnRevert = document.getElementById('btn-revert');
+        
+        const elInspectorHeader = document.getElementById('inspector-header');
+        const elInspectorBody = document.getElementById('inspector-body');
+        
+        const elToast = document.getElementById('toast');
+        const elToastMessage = document.getElementById('toast-message');
+
+        // Initial Load
+        window.addEventListener('DOMContentLoaded', async () => {
+            await loadInitialData();
+            setupEventListeners();
+            
+            // Hide Loader
+            setTimeout(() => {
+                elLoader.style.opacity = 0;
+                setTimeout(() => elLoader.style.display = 'none', 500);
+            }, 300);
+        });
+
+        // Fetch Data from Server
+        async function loadInitialData() {
+            try {
+                const res = await fetch('/api/data');
+                const data = await res.json();
+                if (data.error) {
+                    showToast(data.error, 'error');
+                    return;
+                }
+                
+                catalog = data.catalog;
+                slots = data.slots;
+                originalSchedule = [...data.schedule];
+                currentSchedule = [...data.schedule];
+                nightNames = data.night_names;
+                nightNSlots = data.night_n_slots;
+                
+                // Show initial metrics
+                elMetricScore.textContent = data.score.toLocaleString(undefined, {maximumFractionDigits: 1});
+                elMetricTeff.textContent = data.total_teff.toFixed(2);
+                
+                // Initial validation
+                await runValidation();
+                
+                // Render UI
+                renderTimeline();
+                renderCatalog();
+                updateInspector();
+                
+            } catch (err) {
+                console.error(err);
+                showToast("Failed to load initial data. Server might be down.", "error");
+            }
+        }
+
+        // Run validation against the backend
+        async function runValidation() {
+            try {
+                const res = await fetch('/api/validate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ schedule: currentSchedule })
+                });
+                const report = await res.json();
+                
+                slotErrors = report.slot_errors;
+                actualTimes = report.actual_times || {};
+                
+                // Update live metrics
+                elMetricScore.textContent = report.score.toLocaleString(undefined, {maximumFractionDigits: 1});
+                elMetricTeff.textContent = report.total_teff.toFixed(2);
+                
+                const violations = report.violations_count;
+                elMetricViolations.textContent = violations;
+                
+                if (violations > 0) {
+                    elMetricViolationsCard.classList.add('has-errors');
+                } else {
+                    elMetricViolationsCard.classList.remove('has-errors');
+                }
+                
+                // Sync dirty status
+                checkDirty();
+                
+                // Update slots on screen
+                updateSlotCardStates();
+                
+                // Refresh inspector in case selected slot changed errors
+                updateInspector();
+                
+            } catch (err) {
+                console.error(err);
+                showToast("Validation failed.", "error");
+            }
+        }
+
+        // Render timeline grid (Rows: Time, Columns: Nights)
+        function renderTimeline() {
+            elTimeline.innerHTML = '';
+            
+            if (slots.length === 0) return;
+
+            const TIME_BIN_SIZE = 5; // Bin times to 5-minute intervals to reduce grid row clutter
+
+            // Helper to round minutes to nearest BIN size
+            function getBinnedTime(hstDate) {
+                const h = hstDate.getUTCHours();
+                const m = hstDate.getUTCMinutes();
+                let totalMinutes = h * 60 + m;
+                let binnedMinutes = Math.round(totalMinutes / TIME_BIN_SIZE) * TIME_BIN_SIZE;
+                let binnedH = Math.floor(binnedMinutes / 60) % 24;
+                let binnedM = binnedMinutes % 60;
+                return `${String(binnedH).padStart(2, '0')}:${String(binnedM).padStart(2, '0')}`;
+            }
+
+            // 1. Map slots with their binned HST time and create unique times set
+            const slotMap = new Map();
+            const uniqueTimesSet = new Set();
+            
+            slots.forEach((slotData, globalIdx) => {
+                const actualTime = actualTimes[globalIdx];
+                let hstDate;
+                if (actualTime) {
+                    // actualTime.start is "YYYY-MM-DDTHH:MM:SS" (HST)
+                    // Treat it as UTC to parse hours/minutes cleanly via UTCHours/UTCMinutes
+                    let isoStr = actualTime.start;
+                    if (!isoStr.endsWith('Z')) {
+                        isoStr += 'Z';
+                    }
+                    hstDate = new Date(isoStr);
+                } else {
+                    // Fallback to slot grid time (HST = UTC - 10 hours)
+                    let isoStr = slotData.time_hst;
+                    if (!isoStr.endsWith('Z')) {
+                        isoStr += 'Z';
+                    }
+                    const utcDate = new Date(isoStr);
+                    hstDate = new Date(utcDate.getTime() - (10 * 60 * 60 * 1000));
+                }
+                const timeStr = getBinnedTime(hstDate);
+                
+                uniqueTimesSet.add(timeStr);
+                slotMap.set(`${slotData.night_idx}_${timeStr}`, globalIdx);
+            });
+            
+            // 2. Sort times dynamically from evening to next morning (HST observing window)
+            function getSortValue(timeStr) {
+                const [h, m] = timeStr.split(':').map(Number);
+                let minutes = h * 60 + m;
+                if (h < 12) {
+                    minutes += 24 * 60; // Next morning
+                }
+                return minutes;
+            }
+            const uniqueTimes = Array.from(uniqueTimesSet).sort((a, b) => getSortValue(a) - getSortValue(b));
+
+            // 3. Build calendar-like grid table
+            const table = document.createElement('table');
+            table.className = 'timeline-table';
+            
+            // Header Row (Nights)
+            const thead = document.createElement('thead');
+            const headerRow = document.createElement('tr');
+            
+            const timeColHeader = document.createElement('th');
+            timeColHeader.className = 'time-column-header';
+            timeColHeader.textContent = 'Time (HST)';
+            headerRow.appendChild(timeColHeader);
+            
+            for (let ni = 0; ni < nightNames.length; ni++) {
+                const th = document.createElement('th');
+                const nightDate = nightNames[ni];
+                th.textContent = `Night ${ni+1}\n(${nightDate})`;
+                th.style.whiteSpace = 'pre-line';
+                headerRow.appendChild(th);
+            }
+            thead.appendChild(headerRow);
+            table.appendChild(thead);
+            
+            // Body rows (one row per unique time step)
+            const tbody = document.createElement('tbody');
+            
+            uniqueTimes.forEach(timeStr => {
+                const row = document.createElement('tr');
+                
+                // Time column
+                const timeCell = document.createElement('td');
+                timeCell.className = 'time-cell';
+                timeCell.textContent = timeStr;
+                row.appendChild(timeCell);
+                
+                // Night cells
+                for (let ni = 0; ni < nightNames.length; ni++) {
+                    const td = document.createElement('td');
+                    const key = `${ni}_${timeStr}`;
+                    
+                    if (slotMap.has(key)) {
+                        const globalSlotIdx = slotMap.get(key);
+                        
+                        const card = document.createElement('div');
+                        card.className = `slot-card`;
+                        card.id = `slot-card-${globalSlotIdx}`;
+                        card.dataset.slotIndex = globalSlotIdx;
+                        
+                        card.innerHTML = `
+                            <div class="slot-time">Slot ${globalSlotIdx + 1}</div>
+                            <div class="slot-target-code" id="slot-code-${globalSlotIdx}">Loading...</div>
+                            <div class="slot-meta">
+                                <span class="slot-badge" id="slot-badge-${globalSlotIdx}">-</span>
+                                <span class="slot-priority" id="slot-priority-${globalSlotIdx}">-</span>
+                            </div>
+                            <div id="slot-indicator-${globalSlotIdx}"></div>
+                        `;
+                        
+                        card.addEventListener('click', () => handleSlotClick(globalSlotIdx));
+                        td.appendChild(card);
+                    } else {
+                        // Empty placeholder for slots not existing on this night
+                        const placeholder = document.createElement('div');
+                        placeholder.className = 'slot-placeholder';
+                        td.appendChild(placeholder);
+                    }
+                    row.appendChild(td);
+                }
+                tbody.appendChild(row);
+            });
+            
+            table.appendChild(tbody);
+            elTimeline.appendChild(table);
+            
+            updateSlotCardContents();
+        }
+
+        // Update slot contents without rebuilding the DOM
+        function updateSlotCardContents() {
+            let slotCounter = 0;
+            for (let ni = 0; ni < nightNames.length; ni++) {
+                const slotsCount = nightNSlots[ni];
+                let occupiedCount = 0;
+                for (let s = 0; s < slotsCount; s++) {
+                    const globalSlotIdx = slotCounter + s;
+                    const targetIdx = currentSchedule[globalSlotIdx];
+                    
+                    const elCode = document.getElementById(`slot-code-${globalSlotIdx}`);
+                    const elBadge = document.getElementById(`slot-badge-${globalSlotIdx}`);
+                    const elPriority = document.getElementById(`slot-priority-${globalSlotIdx}`);
+                    const card = document.getElementById(`slot-card-${globalSlotIdx}`);
+                    
+                    card.className = 'slot-card'; // reset classes
+                    
+                    if (targetIdx < 0) {
+                        elCode.textContent = '(empty)';
+                        elCode.style.color = 'var(--text-muted)';
+                        elBadge.className = 'slot-badge badge-empty';
+                        elBadge.textContent = 'EMPTY';
+                        elPriority.textContent = '';
+                        card.classList.add('cat-empty');
+                        card.title = '';
+                    } else {
+                        occupiedCount++;
+                        const target = catalog[targetIdx];
+                        elCode.textContent = target.code;
+                        elCode.style.color = '#ffffff';
+                        elBadge.className = `slot-badge badge-${target.category}`;
+                        elBadge.textContent = target.category;
+                        elPriority.textContent = `P${target.priority}`;
+                        card.classList.add(`cat-${target.category}`);
+                        card.title = target.code;
+                    }
+                    
+                    if (globalSlotIdx === selectedSlotIndex) {
+                        card.classList.add('selected');
+                    }
+                }
+                const elStats = document.getElementById(`night-stats-${ni}`);
+                if (elStats) {
+                    elStats.textContent = `Occupied: ${occupiedCount} / ${slotsCount} slots`;
+                }
+                slotCounter += slotsCount;
+            }
+            
+            updateSlotCardStates();
+        }
+
+        // Apply error/warning rings to slot cards based on validation report
+        function updateSlotCardStates() {
+            for (let s = 0; s < slots.length; s++) {
+                const card = document.getElementById(`slot-card-${s}`);
+                const elIndicator = document.getElementById(`slot-indicator-${s}`);
+                
+                if (!card) continue;
+                
+                card.classList.remove('has-error', 'has-warning');
+                elIndicator.innerHTML = '';
+                
+                // Reset card title to target code first (to avoid stacking on multiple validations)
+                const targetIdx = currentSchedule[s];
+                if (targetIdx >= 0) {
+                    card.title = catalog[targetIdx].code;
+                } else {
+                    card.title = '';
+                }
+                
+                const errors = slotErrors[s] || [];
+                if (errors.length > 0) {
+                    const hasError = errors.some(e => e.type === 'error');
+                    const hasWarning = errors.some(e => e.type === 'warning');
+                    
+                    if (hasError) {
+                        card.classList.add('has-error');
+                        elIndicator.innerHTML = '<div class="error-dot"></div>';
+                    } else if (hasWarning) {
+                        card.classList.add('has-warning');
+                        elIndicator.innerHTML = '<div class="warning-dot"></div>';
+                    }
+                    
+                    // Add error details to tooltip (hover title)
+                    const errorMsgs = errors.map(e => `[${e.type.toUpperCase()}] ${e.msg}`).join('\n');
+                    if (card.title) {
+                        card.title += `\n\nConstraints Report:\n${errorMsgs}`;
+                    } else {
+                        card.title = errorMsgs;
+                    }
+                }
+            }
+        }
+
+        // Render target catalog list
+        function renderCatalog() {
+            const filterCat = elFilterCategory.value;
+            const filterPri = elFilterPriority.value;
+            const searchVal = elSearchInput.value.toLowerCase().trim();
+            
+            elCatalogList.innerHTML = '';
+            
+            // Add a special "Empty Slot" option at the top of the catalog
+            const emptyBtnDiv = document.createElement('div');
+            emptyBtnDiv.className = 'empty-btn-container';
+            emptyBtnDiv.innerHTML = `
+                <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 0.7rem; width: 100%; border-style: dashed;" id="btn-make-empty">
+                    Set Slot to Empty
+                </button>
+            `;
+            elCatalogList.appendChild(emptyBtnDiv);
+            document.getElementById('btn-make-empty').addEventListener('click', () => {
+                if (selectedSlotIndex !== null) {
+                    currentSchedule[selectedSlotIndex] = -1;
+                    runValidation();
+                    updateSlotCardContents();
+                } else {
+                    showToast("First select a slot on the timeline to empty.", "warning");
+                }
+            });
+
+            catalog.forEach(target => {
+                // Filters
+                if (filterCat !== 'ALL' && target.category !== filterCat) return;
+                if (filterPri !== 'ALL' && target.priority !== parseInt(filterPri)) return;
+                if (searchVal && !target.code.toLowerCase().includes(searchVal)) return;
+                
+                const item = document.createElement('div');
+                item.className = 'catalog-item';
+                if (target.index === selectedCatalogIndex) {
+                    item.classList.add('selected');
+                }
+                
+                item.innerHTML = `
+                    <div class="catalog-item-header">
+                        <span class="catalog-item-code">${target.code}</span>
+                        <span class="slot-badge badge-${target.category}">${target.category}</span>
+                    </div>
+                    <div class="catalog-item-meta">
+                        <span>Prio: P${target.priority}</span>
+                        <span>Duration: ${target.duration_slots} slot(s)</span>
+                    </div>
+                    <div class="catalog-item-details">
+                        <span>RA: ${target.ra.toFixed(2)}°</span>
+                        <span>Dec: ${target.dec.toFixed(2)}°</span>
+                    </div>
+                `;
+                
+                item.addEventListener('click', () => handleCatalogClick(target.index));
+                elCatalogList.appendChild(item);
+            });
+        }
+
+        // Timeline slot clicks handler
+        function handleSlotClick(slotIdx) {
+            if (selectedSlotIndex === slotIdx) {
+                // Deselect
+                selectedSlotIndex = null;
+            } else if (selectedSlotIndex !== null) {
+                // Swap targets between selectedSlotIndex and slotIdx
+                const temp = currentSchedule[selectedSlotIndex];
+                currentSchedule[selectedSlotIndex] = currentSchedule[slotIdx];
+                currentSchedule[slotIdx] = temp;
+                
+                showToast(`Swapped Slot ${selectedSlotIndex + 1} and Slot ${slotIdx + 1}`, "success");
+                selectedSlotIndex = null; // reset selection
+                
+                // Validate & re-render
+                runValidation();
+                updateSlotCardContents();
+            } else {
+                // Select slot
+                selectedSlotIndex = slotIdx;
+            }
+            
+            updateSlotCardContents();
+            updateInspector();
+        }
+
+        // Catalog target click handler
+        function handleCatalogClick(targetIdx) {
+            selectedCatalogIndex = targetIdx;
+            
+            // Re-render selection in catalog list
+            const items = elCatalogList.querySelectorAll('.catalog-item');
+            items.forEach(el => el.classList.remove('selected'));
+            
+            // Apply selection class dynamically or rebuild
+            renderCatalog();
+            
+            // If a slot is currently selected, apply this target to the slot
+            if (selectedSlotIndex !== null) {
+                const target = catalog[targetIdx];
+                
+                // Write target index to current schedule at selectedSlotIndex
+                // If the target requires multiple slots (duration_slots > 1), we fill consecutive slots if possible
+                const duration = target.duration_slots;
+                const confirmApply = () => {
+                    for (let d = 0; d < duration; d++) {
+                        const targetSlot = selectedSlotIndex + d;
+                        if (targetSlot < currentSchedule.length) {
+                            currentSchedule[targetSlot] = targetIdx;
+                        }
+                    }
+                    showToast(`Assigned ${target.code} to Slot ${selectedSlotIndex + 1}` + (duration > 1 ? ` (filling ${duration} slots)` : ''), "success");
+                    selectedSlotIndex = null;
+                    selectedCatalogIndex = null;
+                    runValidation();
+                    updateSlotCardContents();
+                };
+
+                if (duration > 1 && selectedSlotIndex + duration > currentSchedule.length) {
+                    showToast(`Not enough slots remaining at the end of the timeline to fit ${duration} slots.`, "error");
+                } else if (duration > 1) {
+                    // Quick check if overwrite will happen
+                    let willOverwrite = false;
+                    for (let d = 1; d < duration; d++) {
+                        if (currentSchedule[selectedSlotIndex + d] !== -1) {
+                            willOverwrite = true;
+                            break;
+                        }
+                    }
+                    if (willOverwrite) {
+                        if (confirm(`Target requires ${duration} slots. Applying it will overwrite consecutive slots. Proceed?`)) {
+                            confirmApply();
+                        }
+                    } else {
+                        confirmApply();
+                    }
+                } else {
+                    confirmApply();
+                }
+            } else {
+                updateInspector();
+            }
+        }
+
+        // Update details inspector panel
+        function updateInspector() {
+            if (selectedSlotIndex === null) {
+                elInspectorHeader.textContent = "Inspector";
+                if (selectedCatalogIndex !== null) {
+                    // Show catalog details
+                    const target = catalog[selectedCatalogIndex];
+                    elInspectorHeader.textContent = `Catalog Target: ${target.code}`;
+                    elInspectorBody.innerHTML = `
+                        <div style="font-size:0.85rem; font-weight:600; color:white; margin-bottom:8px;">Target Info</div>
+                        <div><b>Category:</b> ${target.category}</div>
+                        <div><b>Priority:</b> P${target.priority}</div>
+                        <div><b>Required Duration:</b> ${target.duration_slots} slot(s) (${target.duration_slots * 20} mins)</div>
+                        <div><b>Coordinates:</b> RA ${target.ra.toFixed(5)}°, Dec ${target.dec.toFixed(5)}°</div>
+                        <div style="margin-top:12px; color:var(--text-muted); font-style:italic;">To assign this target, click a slot on the timeline first, then select this target.</div>
+                    `;
+                } else {
+                    elInspectorBody.textContent = "Select a slot on the timeline to inspect constraint violations and target details.";
+                }
+                return;
+            }
+
+            const slotIdx = selectedSlotIndex;
+            const targetIdx = currentSchedule[slotIdx];
+            const slotData = slots[slotIdx];
+            const errors = slotErrors[slotIdx] || [];
+            
+            elInspectorHeader.textContent = `Slot ${slotIdx + 1} Details`;
+            
+            // Format to HST Time
+            let isoStr = slotData.time_hst;
+            if (!isoStr.endsWith('Z')) isoStr += 'Z';
+            const utcDate = new Date(isoStr);
+            const hstDate = new Date(utcDate.getTime() - (10 * 60 * 60 * 1000));
+            const yr = hstDate.getUTCFullYear();
+            const mo = String(hstDate.getUTCMonth() + 1).padStart(2, '0');
+            const dy = String(hstDate.getUTCDate()).padStart(2, '0');
+            const hr = String(hstDate.getUTCHours()).padStart(2, '0');
+            const mn = String(hstDate.getUTCMinutes()).padStart(2, '0');
+            const hstTimeStr = `${yr}-${mo}-${dy} ${hr}:${mn}`;
+            
+            // Format actual observation time with slew delay
+            const actualTime = actualTimes[slotIdx];
+            let actualTimeHtml = '';
+            if (actualTime) {
+                const startStr = actualTime.start.split('T')[1].substring(0, 5);
+                const endStr = actualTime.end.split('T')[1].substring(0, 5);
+                const delayMins = Math.floor(actualTime.slew_delay / 60);
+                const delaySecs = Math.round(actualTime.slew_delay % 60);
+                let delayStr = '';
+                if (delayMins > 0 || delaySecs > 0) {
+                    delayStr = ` (incl. slew delay: ${delayMins > 0 ? delayMins + 'm' : ''}${delaySecs}s)`;
+                }
+                actualTimeHtml = `<div><b>Actual Obs Time:</b> <span style="color:#00f0ff; font-weight:600;">${startStr} - ${endStr}</span> <span style="font-size:0.65rem; color:var(--text-muted);">${delayStr}</span></div>`;
+            }
+            
+            let html = `
+                <div style="margin-bottom:10px;">
+                    <div><b>Grid Time:</b> ${hstTimeStr}</div>
+                    ${actualTimeHtml}
+                    <div><b>Night:</b> ${slotData.night_idx + 1}</div>
+                </div>
+            `;
+            
+            if (targetIdx < 0) {
+                html += `
+                    <div style="border-top: 1px solid rgba(255,255,255,0.08); padding-top:10px;">
+                        <span class="slot-badge badge-empty">EMPTY SLOT</span>
+                        <div style="margin-top:8px; color:var(--text-muted);">No scientific target scheduled. Telescope will be idle.</div>
+                    </div>
+                `;
+            } else {
+                const target = catalog[targetIdx];
+                html += `
+                    <div style="border-top: 1px solid rgba(255,255,255,0.08); padding-top:8px; margin-bottom:10px;">
+                        <div style="font-weight:600; color:white; font-size:0.8rem; margin-bottom:4px;">Scheduled Target</div>
+                        <div><b>Code:</b> <span style="font-family:'JetBrains Mono';">${target.code}</span></div>
+                        <div><b>Category:</b> ${target.category} | <b>Priority:</b> P${target.priority}</div>
+                        <div><b>Duration:</b> ${target.duration_slots} slot(s) (${target.duration_slots * 20}m)</div>
+                        <div><b>RA / Dec:</b> ${target.ra.toFixed(4)}° / ${target.dec.toFixed(4)}°</div>
+                    </div>
+                `;
+            }
+            
+            // Warnings & Errors Section
+            if (errors.length > 0) {
+                html += `
+                    <div style="border-top: 1px solid rgba(255,255,255,0.08); padding-top:8px;">
+                        <div style="font-weight:600; color:white; font-size:0.8rem; margin-bottom:4px;">Constraints Report</div>
+                `;
+                
+                errors.forEach(err => {
+                    const cssClass = err.type === 'error' ? 'inspector-error-item' : 'inspector-warning-item';
+                    html += `<div class="${cssClass}">[${err.type.toUpperCase()}] ${err.msg}</div>`;
+                });
+                
+                html += `</div>`;
+            } else if (targetIdx >= 0) {
+                html += `
+                    <div style="border-top: 1px solid rgba(255,255,255,0.08); padding-top:8px; color:#39ff14;">
+                        ✓ All physical limits and sequencing constraints are satisfied.
+                    </div>
+                `;
+            }
+            
+            elInspectorBody.innerHTML = html;
+        }
+
+        // Check if schedule differs from original
+        function checkDirty() {
+            isDirty = false;
+            for (let i = 0; i < originalSchedule.length; i++) {
+                if (currentSchedule[i] !== originalSchedule[i]) {
+                    isDirty = true;
+                    break;
+                }
+            }
+            
+            elBtnSave.disabled = !isDirty;
+            elBtnRevert.disabled = !isDirty;
+            
+            if (isDirty) {
+                elMetricScoreCard.classList.add('dirty');
+            } else {
+                elMetricScoreCard.classList.remove('dirty');
+            }
+        }
+
+        // Button Event Listeners
+        function setupEventListeners() {
+            // Revert changes
+            elBtnRevert.addEventListener('click', () => {
+                if (confirm("Are you sure you want to revert all unsaved changes?")) {
+                    currentSchedule = [...originalSchedule];
+                    selectedSlotIndex = null;
+                    selectedCatalogIndex = null;
+                    runValidation();
+                    updateSlotCardContents();
+                    showToast("Changes reverted.", "success");
+                }
+            });
+            
+            // Save changes
+            elBtnSave.addEventListener('click', async () => {
+                elBtnSave.disabled = true;
+                elBtnSave.textContent = "Saving...";
+                
+                try {
+                    const res = await fetch('/api/save', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ schedule: currentSchedule })
+                    });
+                    const report = await res.json();
+                    
+                    if (report.status === 'success') {
+                        originalSchedule = [...currentSchedule];
+                        isDirty = false;
+                        checkDirty();
+                        showToast(`Schedule saved successfully! (Backup: ${report.backup_json})`, "success");
+                    } else {
+                        showToast(`Failed to save: ${report.error}`, "error");
+                    }
+                } catch (err) {
+                    console.error(err);
+                    showToast("Failed to save schedule. Server error.", "error");
+                } finally {
+                    elBtnSave.textContent = "Save Schedule";
+                    elBtnSave.disabled = !isDirty;
+                }
+            });
+            
+            // Search Input handler (incremental filtering)
+            elSearchInput.addEventListener('input', () => {
+                renderCatalog();
+            });
+            
+            // Select filters handler
+            elFilterCategory.addEventListener('change', () => {
+                renderCatalog();
+            });
+            elFilterPriority.addEventListener('change', () => {
+                renderCatalog();
+            });
+
+            // Resizer / Splitter Drag logic for Catalog list and Inspector Panel
+            const resizer = document.getElementById('resizer');
+            const inspectorPanel = document.querySelector('.inspector-panel');
+            const catalogPanel = document.querySelector('.catalog-panel');
+            
+            let isDragging = false;
+            
+            resizer.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                resizer.classList.add('dragging');
+                document.body.style.cursor = 'ns-resize';
+                document.body.style.userSelect = 'none';
+                e.preventDefault();
+            });
+            
+            document.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+                
+                const rect = catalogPanel.getBoundingClientRect();
+                const newHeight = rect.bottom - e.clientY;
+                
+                // Constraints: Min height 100px, Max height 75% of catalog sidebar
+                const maxHeight = rect.height * 0.75;
+                if (newHeight >= 100 && newHeight <= maxHeight) {
+                    inspectorPanel.style.height = `${newHeight}px`;
+                }
+            });
+            
+            document.addEventListener('mouseup', () => {
+                if (isDragging) {
+                    isDragging = false;
+                    resizer.classList.remove('dragging');
+                    document.body.style.cursor = '';
+                    document.body.style.userSelect = '';
+                }
+            });
+        }
+
+        // Show toast alert helper
+        let toastTimeout = null;
+        function showToast(message, type = 'success') {
+            elToastMessage.textContent = message;
+            elToast.className = `toast show ${type}`;
+            
+            if (toastTimeout) clearTimeout(toastTimeout);
+            
+            toastTimeout = setTimeout(() => {
+                elToast.classList.remove('show');
+            }, 4000);
+        }
+    </script>
+</body>
+</html>

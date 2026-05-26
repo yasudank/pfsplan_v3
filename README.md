@@ -161,6 +161,32 @@ Comparison of old (independent seeds) vs new (population-based SA) approach:
 
 ---
 
+## GUI Schedule Editor (`schedule_editor.py`)
+
+A modern, web-based graphical interface for viewing, manually modifying, and validating observing schedules.
+
+### Features
+- **Interactive Drag/Swap Slots**: Select any time slot on the grid and swap it with another slot, empty it, or replace it with a scientific target from the catalog.
+- **Real-time Hard Limit Validation**: When changes are made, the tool automatically re-evaluates all physical and scheduling constraints in the background:
+  - *Altitude Limit*: 32.5° to 75.0°
+  - *Rotator Limit*: -174° to 174° (and rotator 180° cross wrap checks)
+  - *Overtime Limit*: Target observation ending time within night limits (+10m tolerance)
+  - *Ordering Constraints*: Enforces required sequence of identical target coordinate steps
+  - *GA-then-GE sequencing*: Prevents scheduling GE targets after GA targets on the same night
+- **Live Score Tracking**: Displays the re-calculated objective score and total $t_{\mathrm{eff}}$ instantly on edit.
+- **Automatic Backups**: Saving changes creates timestamped backups of `schedule_result.json` and `schedule_result.txt` in the `backups/` directory (e.g., `schedule_result_YYYYMMDD_HHMMSS.json`) before overwriting.
+
+### Usage
+Run the Flask-based utility local server:
+```bash
+# Start the server on a port of your choice (e.g., 8085)
+bin/python schedule_editor.py --port 8085
+```
+
+Open `http://127.0.0.1:8085/` in your browser. (If using VS Code Remote-SSH, the port is forwarded automatically).
+
+---
+
 ## Core Components
 
 - **`obs_config.yaml`**: The unified configuration file where you can adjust telescope details, twilight limits, program switching margins, scheduling slot durations, hardware limits, and SA scheduler weights.
