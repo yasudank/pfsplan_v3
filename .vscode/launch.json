@@ -1,0 +1,31 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run Schedule Editor (Flask GUI)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/schedule_editor.py",
+            "args": ["--port", "8085"],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Run Pipeline (2026 May)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/run_pipeline.py",
+            "args": ["2026", "May"],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Run SA Scheduler (Default)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/sa_scheduler.py",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        }
+    ]
+}

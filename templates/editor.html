@@ -363,6 +363,15 @@
             display: flex;
             flex-direction: column;
             backdrop-filter: blur(10px);
+            transition: width 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.2s ease, border-color 0.3s ease;
+            overflow: hidden;
+        }
+
+        .catalog-panel.collapsed {
+            width: 0;
+            border-left: none;
+            opacity: 0;
+            pointer-events: none;
         }
 
         .catalog-header {
@@ -739,6 +748,9 @@
 
             <!-- Actions buttons -->
             <div class="actions-bar">
+                <button class="btn btn-secondary" id="btn-toggle-sidebar" title="Hide Target Catalog & Inspector">
+                    <span id="btn-toggle-sidebar-text">Hide Sidebar</span>
+                </button>
                 <button class="btn btn-secondary" id="btn-revert" disabled>Revert Changes</button>
                 <button class="btn btn-primary" id="btn-save" disabled>Save Schedule</button>
             </div>
@@ -834,6 +846,9 @@
         
         const elBtnSave = document.getElementById('btn-save');
         const elBtnRevert = document.getElementById('btn-revert');
+        const elBtnToggleSidebar = document.getElementById('btn-toggle-sidebar');
+        const elBtnToggleSidebarText = document.getElementById('btn-toggle-sidebar-text');
+        const elCatalogPanel = document.querySelector('.catalog-panel');
         
         const elInspectorHeader = document.getElementById('inspector-header');
         const elInspectorBody = document.getElementById('inspector-body');
@@ -1433,6 +1448,18 @@
 
         // Button Event Listeners
         function setupEventListeners() {
+            // Toggle sidebar
+            elBtnToggleSidebar.addEventListener('click', () => {
+                const isCollapsed = elCatalogPanel.classList.toggle('collapsed');
+                if (isCollapsed) {
+                    elBtnToggleSidebarText.textContent = "Show Sidebar";
+                    elBtnToggleSidebar.title = "Show Target Catalog & Inspector";
+                } else {
+                    elBtnToggleSidebarText.textContent = "Hide Sidebar";
+                    elBtnToggleSidebar.title = "Hide Target Catalog & Inspector";
+                }
+            });
+
             // Revert changes
             elBtnRevert.addEventListener('click', () => {
                 if (confirm("Are you sure you want to revert all unsaved changes?")) {
