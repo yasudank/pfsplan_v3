@@ -1602,7 +1602,7 @@ def main():
     parser = argparse.ArgumentParser(description="PFS SA Scheduler (Numba JIT Multiprocessing Version)")
     parser.add_argument("-j", "--jobs", type=int, default=4, help="Number of parallel jobs to run (default: 4)")
     parser.add_argument("--seed", type=int, default=42, help="Base random seed (default: 42)")
-    parser.add_argument("--total-seeds", type=int, default=None, help="Total number of seeds to test (default: same as jobs)")
+    parser.add_argument("--total-seeds", type=int, default=16, help="Total number of seeds to test (default: 16)")
     parser.add_argument("--iter", type=int, default=N_ITER, help=f"Number of SA iterations (default: {N_ITER})")
     parser.add_argument("-v", "--vis-map", type=str, default=str(VIS_MAP_FILE), help=f"Path to input vis_map.npz (default: {VIS_MAP_FILE.name})")
     parser.add_argument("-o", "--output-txt", type=str, default=str(OUTPUT_TXT), help=f"Path to output schedule text (default: {OUTPUT_TXT.name})")

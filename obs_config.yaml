@@ -41,7 +41,7 @@ slew:
 scheduler:
   sa_t0: 3000.0                # Initial SA temperature
   sa_alpha: 0.999995           # SA cooling rate (temperature decay factor)
-  sa_iterations: 1000000       # Number of iterations/loops per SA run
+  sa_iterations: 8000000       # Number of iterations/loops per SA run
   sa_t_min: 0.5                # Final minimum temperature for stopping SA
   weight_hard: 1000000.0       # Penalty weight for physical/hard constraint violations (altitude, rotator limits, etc.)
   weight_split: 1000.0         # Penalty weight for program night boundary overlaps
