@@ -20,7 +20,7 @@ This pipeline is built for Python 3.12 and depends on standard scientific and as
 Within the virtual environment, install the required packages:
 ```bash
 # Standard dependency packages
-./bin/python3 -m pip install numpy astropy astroplan numba matplotlib pyyaml reportlab pandas
+./bin/python3 -m pip install numpy astropy astroplan numba matplotlib pyyaml reportlab pandas tqdm
 ```
 
 ---
@@ -43,13 +43,131 @@ This will run the following individual scripts sequentially:
 
 ---
 
+## SA Scheduler Algorithm (`sa_scheduler.py`)
+
+### Population-based Simulated Annealing
+
+The scheduler uses a **Population-based SA** approach with multiple optimization strategies to find high-quality observation schedules with low variance across runs.
+
+#### Execution Flow
+
+```
+Phase 1: N workers start from randomized greedy initial schedules
+    ↓ SA optimization (iter_per_phase iterations each)
+    ↓ Sort by score → top 50% = "elite"
+Phase 2: Elite keep their schedules, others restart from elite solutions
+    ↓ SA optimization (lower T0)
+    ↓ Sort → select new elite
+Phase 3-4: Repeat with progressively lower temperatures
+    ↓
+Final: Best schedule across all workers selected
+```
+
+- **Phase 1**: All workers independently build randomized greedy initial schedules (same-priority targets are shuffled) and run SA optimization at full temperature (`T0`).
+- **Phase 2+**: The top `elite_fraction` (default 50%) of workers continue from their best schedules. The remaining workers restart from a random elite schedule. Temperature decreases each phase (`T0 × reheat_factor^(phase-1)`).
+- This propagates good structural solutions while maintaining diversity through different random seeds.
+
+#### Initial Schedule Construction (Randomized Greedy)
+
+Each worker generates a unique initial schedule by:
+1. Adding small noise (±0.4) to target priorities to randomize ordering within same-priority groups
+2. Greedily assigning targets night-by-night in priority order
+3. Checking visibility, rotator limits, ordering constraints, and GA/GE sequencing rules
+
+#### SA Neighborhood Operations
+
+The SA explorer uses the following move types with assigned probabilities:
+
+| Probability | Move Type | Description |
+|-------------|-----------|-------------|
+| 4% | **Multi-night R&R** | Destroy 2-3 random nights, rebuild with greedy insertion |
+| 3% | **Category R&R** | Remove all targets of a random category (CO/GA/GE), reinsert |
+| 6% | **Single-night R&R** | Destroy 1 random night, rebuild with greedy insertion |
+| 4% | **Random swap** | Swap two random slots |
+| 18% | **Block swap** | Swap two consecutive 2-slot blocks |
+| 13% | **Target relocation** | Move a target to a new valid position |
+| 12% | **Target replacement** | Replace an observed target with an unobserved one of same slot size |
+| 10% | **Insert unobserved** | Place an unobserved target into empty slots |
+| 5% | **Remove target** | Remove a random observed target |
+| 5% | **Replace G→2×CO** | Replace a 2-slot target with two 1-slot CO targets |
+| 5% | **Replace 2×CO→G** | Replace two adjacent CO targets with a 2-slot target |
+| 10% | **Insert G in gap** | Insert a 2-slot target into a CO+empty or empty+CO gap |
+| 5% | **Replace G→CO split** | Replace a 2-slot target, put one CO in each original slot |
+
+#### Reheating
+
+Periodic temperature resets prevent the search from getting trapped in local optima:
+- Every `sa_reheat_interval` iterations (default: 250,000), temperature is reset to `T0 × sa_reheat_factor` (default: 30% of T0)
+- Reheating stops after `sa_reheat_cutoff` fraction (default: 80%) of total iterations to allow final convergence
+
+#### Score Function
+
+The objective function combines multiple weighted components:
+
+| Component | Weight | Description |
+|-----------|--------|-------------|
+| Hard violations | -1,000,000 | Altitude/rotator limit violations, ordering violations |
+| Priority bonus | +100 × (max_pri - pri + 1) | Reward for observing high-priority targets |
+| t_eff sum | +100 × Σt_eff | Reward for effective exposure time quality |
+| Split penalty | -1,000 | Penalty for non-contiguous observation of same target |
+| Empty slots | -5,000 | Penalty per unused slot |
+| Slew time | -5 × total_slew | Penalty for telescope slew overhead |
+| Overtime | -1,000 × minutes | Penalty for exceeding night length |
+
+### Usage
+
+```bash
+# Basic run (4 jobs, 4 seeds, 1M iterations)
+bin/python sa_scheduler.py
+
+# Recommended production run (~80 seconds)
+bin/python sa_scheduler.py -j 8 --total-seeds 16 --iter 4000000
+
+# Larger run for maximum quality (~5 minutes)
+bin/python sa_scheduler.py -j 8 --total-seeds 32 --iter 8000000
+
+# Custom output paths
+bin/python sa_scheduler.py -j 8 --total-seeds 16 --iter 4000000 \
+  --output-seeds-csv results.csv \
+  -o schedule.txt \
+  --output-json schedule.json \
+  --output-plot schedule.png
+```
+
+#### Command-line Arguments
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `-j`, `--jobs` | 4 | Number of parallel worker processes |
+| `--seed` | 42 | Base random seed |
+| `--total-seeds` | same as jobs | Total number of workers (across all phases) |
+| `--iter` | 1,000,000 | Total SA iterations (split across phases) |
+| `-v`, `--vis-map` | `vis_map.npz` | Input visibility map file |
+| `-o`, `--output-txt` | `schedule_result.txt` | Output text schedule |
+| `--output-json` | `schedule_result.json` | Output JSON schedule |
+| `--output-plot` | `schedule_plot.png` | Output Gantt chart plot |
+| `--output-seeds-csv` | `seeds_scores.csv` | CSV with per-phase per-seed scores |
+
+### Performance Benchmarks
+
+Comparison of old (independent seeds) vs new (population-based SA) approach:
+
+| Metric | Old: 1024 seeds × 1M iter | New: 16 workers × 4M iter (4 phases) |
+|--------|---------------------------|---------------------------------------|
+| Best score | 18,986 | **19,199** (+1.1%) |
+| Worst score | 8,838 | **18,296** |
+| Score std | ~1,700 | **241** (86% reduction) |
+| Wall time | Hours (1024 sequential) | **~80 seconds** |
+
+---
+
 ## Core Components
 
 - **`obs_config.yaml`**: The unified configuration file where you can adjust telescope details, twilight limits, program switching margins, scheduling slot durations, hardware limits, and SA scheduler weights.
 - **`run_pipeline.py`**: The main automation wrapper. It automatically detects and calls the local virtual environment Python interpreter (`./bin/python3`) if available.
 - **`get_obsdates.py`**: Queries the NAOJ schedule CGI and formats observing intervals.
 - **`make_visibility_map.py`**: Builds the visibility maps (`vis_map.npz`) containing the target coordinates, visibility grid, and effective exposure factor.
-- **`sa_scheduler.py`**: Evaluates and schedules targets using simulated annealing.
+- **`sa_scheduler.py`**: Evaluates and schedules targets using population-based simulated annealing.
 - **`plot_schedule_v3.py`**: Plots altitude profiles, rotator tracking, Mollweide sky coverage projection, and cumulative scheduling progress.
 - **`create_pdf_report_v3.py`**: Reconstructs the schedule data dynamically on the fly to generate the PDF report, ensuring clean code without database or pandas dependency.
 - **`obs_utils.py`**: Houses common utility functions like `load_config()`, `setup_observer()`, and time/target parsers.
@@ -64,7 +182,11 @@ Adjust parameters globally under these main sections:
 - **`scheduling`**: Switching split margins (e.g. `5` minutes) and slot duration (`20` minutes).
 - **`constraints`**: Hardware/physical safety limits (such as `max_airmass`, `max_altitude`, `min_altitude`, and `rotator_min/max`). Highlights violations in the generated PDF report.
 - **`slew`**: Telescope azimuth, elevation, and instrument rotator speed limits.
-- **`scheduler`**: SA cooling schedule variables and scoring weights for scientific priority, constraints, slew times, and consecutive blocks.
+- **`scheduler`**: SA hyperparameters and scoring weights:
+  - `sa_t0`, `sa_alpha`, `sa_iterations`, `sa_t_min`: Core SA cooling schedule
+  - `sa_reheat_interval`, `sa_reheat_factor`, `sa_reheat_cutoff`: Reheating parameters
+  - `population_phases`, `elite_fraction`: Population-based SA parameters
+  - `weight_*`: Scoring function weights
 
 ---
 
@@ -74,4 +196,5 @@ Upon successful execution, the following files will be generated in the root dir
 - **`obsdates_<year><month>.txt`**: Target night boundaries and twilight times.
 - **`vis_map.npz`**: Binary visibility map matrix.
 - **`schedule_result.json` & `schedule_result.txt`**: Plaintext and structured optimized schedule.
+- **`seeds_scores.csv`**: Per-phase, per-seed score records for analysis.
 - **`obsplan_<year><month>.<version>.pdf`**: The final landscape A4 PDF report.
