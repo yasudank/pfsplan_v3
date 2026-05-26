@@ -27,6 +27,7 @@ VIS_MAP_FILE = OBSDIR / "vis_map.npz"
 OUTPUT_TXT = OBSDIR / "schedule_result.txt"
 OUTPUT_JSON = OBSDIR / "schedule_result.json"
 OUTPUT_PLOT = OBSDIR / "schedule_plot.png"
+OUTPUT_SEEDS_CSV = OBSDIR / "seeds_scores.csv"
 
 # ============================================================
 # 設定読み込みと定数
@@ -475,6 +476,19 @@ def sa_optimize(
     n_slots = len(schedule)
     n_targets = len(target_priority)
     
+    # Precompute prior_matrix for ordering constraints
+    prior_matrix = np.zeros((n_targets, n_targets), dtype=np.bool_)
+    for idx in range(len(order_pairs_arr)):
+        ta = order_pairs_arr[idx, 0]
+        tb = order_pairs_arr[idx, 1]
+        prior_matrix[ta, tb] = True
+        
+    # Generate perturbed priority order for randomized greedy recreation
+    perturbed_priority = np.zeros(n_targets, dtype=np.float64)
+    for i in range(n_targets):
+        perturbed_priority[i] = float(target_priority[i]) + np.random.uniform(-0.4, 0.4)
+    priority_order = np.argsort(perturbed_priority)
+    
     current_score = compute_score(
         schedule, target_priority, target_category_code, slot_night_idx, order_pairs_arr, co_adj_matrix, n_nights,
         fine_alt, fine_az, fine_rot, fine_teff, fine_night_minutes, night_slots_start, night_slots_end, co_indices
@@ -495,13 +509,108 @@ def sa_optimize(
         move_type = np.random.random()
         new_schedule = schedule.copy()
         
-        if move_type < 0.05:
+        if move_type < 0.08:
+            # Ruin & Recreate a random night
+            d = np.random.randint(0, n_nights)
+            s_start = night_slots_start[d]
+            s_end = night_slots_end[d]
+            n_slots_in_night = s_end - s_start
+            
+            if n_slots_in_night > 0:
+                # Find assigned targets and their start slot indices
+                assigned = np.zeros(n_targets, dtype=np.bool_)
+                start_slot_index = np.full(n_targets, -1, dtype=np.int32)
+                for s in range(n_slots):
+                    ti = new_schedule[s]
+                    if ti >= 0:
+                        assigned[ti] = True
+                        if start_slot_index[ti] < 0:
+                            start_slot_index[ti] = s
+                            
+                # Ruin: Clear night d
+                for s in range(s_start, s_end):
+                    ti = new_schedule[s]
+                    if ti >= 0:
+                        assigned[ti] = False
+                        start_slot_index[ti] = -1
+                        new_schedule[s] = -1
+                        
+                # Recreate: Greedy insertion for night d
+                k = 0
+                while k < n_slots_in_night:
+                    if new_schedule[s_start + k] >= 0:
+                        k += 1
+                        continue
+                        
+                    placed = False
+                    for ti in priority_order:
+                        if assigned[ti]:
+                            continue
+                            
+                        L = target_n_slots[ti]
+                        if k + L > n_slots_in_night:
+                            continue
+                            
+                        # Check empty
+                        slots_ok = True
+                        for l_idx in range(L):
+                            if new_schedule[s_start + k + l_idx] >= 0:
+                                slots_ok = False
+                                break
+                        if not slots_ok:
+                            continue
+                            
+                        # Check visibility
+                        is_visible = True
+                        for l_idx in range(L):
+                            s = s_start + k + l_idx
+                            if vis_map[ti, s] == 0:
+                                is_visible = False
+                                break
+                        if not is_visible:
+                            continue
+                            
+                        # Check ordering constraint
+                        has_unassigned_prior = False
+                        for ta in range(n_targets):
+                            if prior_matrix[ta, ti]:
+                                if not assigned[ta] or start_slot_index[ta] >= s_start + k:
+                                    has_unassigned_prior = True
+                                    break
+                        if has_unassigned_prior:
+                            continue
+                            
+                        # Check GA-then-GE sequencing constraint
+                        if target_category_code[ti] == 2:
+                            has_ga = False
+                            for prev_k in range(k):
+                                prev_s = s_start + prev_k
+                                prev_ti = new_schedule[prev_s]
+                                if prev_ti >= 0 and target_category_code[prev_ti] == 1:
+                                    has_ga = True
+                                    break
+                            if has_ga:
+                                continue
+                                
+                        # Place target
+                        for l_idx in range(L):
+                            new_schedule[s_start + k + l_idx] = ti
+                        assigned[ti] = True
+                        start_slot_index[ti] = s_start + k
+                        k += L
+                        placed = True
+                        break
+                        
+                    if not placed:
+                        k += 1
+
+        elif move_type < 0.12:
             s1 = np.random.randint(0, n_slots)
             s2 = np.random.randint(0, n_slots)
             if s1 != s2:
                 new_schedule[s1], new_schedule[s2] = schedule[s2], schedule[s1]
 
-        elif move_type < 0.30:
+        elif move_type < 0.32:
             if valid_blocks_count >= 2:
                 b1_idx = np.random.randint(0, valid_blocks_count)
                 b2_idx = np.random.randint(0, valid_blocks_count)
@@ -851,9 +960,7 @@ def sa_optimize(
         
         # JIT内での進捗表示
         if iteration % 200_000 == 0:
-            if worker_id >= 0:
-                print("  [Worker", worker_id, "] iter=", iteration, "  T=", T, "  score=", current_score, "  best=", best_score)
-            else:
+            if worker_id == -1:
                 print("  [Warmup] iter=", iteration, "  T=", T, "  score=", current_score, "  best=", best_score)
             
     return best_schedule, best_score
@@ -1204,26 +1311,84 @@ def plot_schedule(
     print(f"Schedule plot saved: {output_path}")
     plt.close()
 
+def calculate_schedule_teff(schedule, n_nights, night_slots_start, night_slots_end, fine_alt, fine_az, fine_rot, fine_teff, fine_night_minutes):
+    actual_teff_total = 0.0
+    for ni in range(n_nights):
+        s_start = night_slots_start[ni]
+        s_end = night_slots_end[ni]
+        n_slots_n = s_end - s_start
+        if n_slots_n <= 0:
+            continue
+        accum_delay = 0.0
+        last_tgt = -1
+        for s in range(n_slots_n):
+            si = s_start + s
+            ti = schedule[si]
+            if ti >= 0:
+                if last_tgt >= 0 and ti != last_tgt:
+                    m1 = (s - 1) * 20
+                    m2 = s * 20
+                    t_s = calculate_slew_time(
+                        fine_alt[last_tgt, ni, m1], fine_az[last_tgt, ni, m1], fine_rot[last_tgt, ni, m1],
+                        fine_alt[ti, ni, m2], fine_az[ti, ni, m2], fine_rot[ti, ni, m2]
+                    )
+                    accum_delay += t_s
+                st_sec = s * 1200.0 + accum_delay
+                st_min = int(st_sec // 60)
+                ed_min = int((st_sec + 900.0) // 60)
+                n_len = fine_night_minutes[ni]
+                if ed_min < n_len:
+                    alts = fine_alt[ti, ni, st_min : ed_min + 1]
+                    rots = fine_rot[ti, ni, st_min : ed_min + 1]
+                    is_visible_alt = np.all(alts >= 32.5) and np.all(alts <= 75.0)
+                    is_visible_rot = np.all(rots >= -174.0) and np.all(rots <= 174.0)
+                    r_start = rots[0]
+                    r_end = rots[-1]
+                    cross_180 = (r_start * r_end < 0) and (abs(r_start) + abs(r_end) > 180.0)
+                    if is_visible_alt and is_visible_rot and not cross_180:
+                        actual_teff_total += np.mean(fine_teff[ti, ni, st_min : ed_min + 1])
+                last_tgt = ti
+    return actual_teff_total
+
 # ============================================================
 # マルチプロセス用ワーカー
 # ============================================================
 def worker_task(args):
     (
-        worker_id, seed, schedule, vis_map, teff_map, target_priority, target_category_code, target_n_slots,
+        worker_id, seed, dummy_schedule, vis_map, teff_map, target_priority, target_category_code, target_n_slots,
         slot_night_idx, order_pairs_arr, co_adj_matrix, n_nights, fine_alt, fine_az,
         fine_rot, fine_teff, fine_night_minutes, night_slots_start, night_slots_end, co_indices_arr,
         T0, ALPHA, N_ITER, T_MIN
     ) = args
 
-    print(f"  [Worker {worker_id}] Starting SA with seed {seed}...")
+    # Set random seed in worker process
+    np.random.seed(seed)
+
+    # Generate perturbed priority order to diversify initial greedy schedules.
+    # priority ranges from 1 to 9 (lower is higher priority). Noise in [-0.4, 0.4] preserves strict priority order
+    # but randomizes relative order of targets within the same priority level.
+    perturbed_priority = target_priority.astype(np.float64) + np.random.uniform(-0.4, 0.4, size=len(target_priority))
+    priority_order = np.argsort(perturbed_priority)
+
+    # Generate the personalized randomized greedy initial schedule for this seed
+    schedule = greedy_initial_schedule(
+        target_priority, target_category_code, target_n_slots, slot_night_idx, order_pairs_arr,
+        fine_alt, fine_az, fine_rot, fine_night_minutes, night_slots_start, night_slots_end, priority_order
+    )
+
     best_sched, best_score = sa_optimize(
         schedule, vis_map, teff_map, target_priority, target_category_code, target_n_slots, slot_night_idx,
         order_pairs_arr, co_adj_matrix, n_nights, fine_alt, fine_az, fine_rot, fine_teff,
         fine_night_minutes, night_slots_start, night_slots_end, co_indices_arr,
         T0, ALPHA, N_ITER, T_MIN, seed, worker_id
     )
-    print(f"  [Worker {worker_id}] Finished. Score = {best_score}")
-    return best_sched, best_score, seed
+    
+    teff = calculate_schedule_teff(
+        best_sched, n_nights, night_slots_start, night_slots_end,
+        fine_alt, fine_az, fine_rot, fine_teff, fine_night_minutes
+    )
+    
+    return best_sched, best_score, teff, seed
 
 
 # ============================================================
@@ -1233,29 +1398,35 @@ def main():
     parser = argparse.ArgumentParser(description="PFS SA Scheduler (Numba JIT Multiprocessing Version)")
     parser.add_argument("-j", "--jobs", type=int, default=4, help="Number of parallel jobs to run (default: 4)")
     parser.add_argument("--seed", type=int, default=42, help="Base random seed (default: 42)")
+    parser.add_argument("--total-seeds", type=int, default=None, help="Total number of seeds to test (default: same as jobs)")
     parser.add_argument("--iter", type=int, default=N_ITER, help=f"Number of SA iterations (default: {N_ITER})")
     parser.add_argument("-v", "--vis-map", type=str, default=str(VIS_MAP_FILE), help=f"Path to input vis_map.npz (default: {VIS_MAP_FILE.name})")
     parser.add_argument("-o", "--output-txt", type=str, default=str(OUTPUT_TXT), help=f"Path to output schedule text (default: {OUTPUT_TXT.name})")
     parser.add_argument("--output-json", type=str, default=str(OUTPUT_JSON), help=f"Path to output schedule JSON (default: {OUTPUT_JSON.name})")
     parser.add_argument("--output-plot", type=str, default=str(OUTPUT_PLOT), help=f"Path to output schedule plot image (default: {OUTPUT_PLOT.name})")
+    parser.add_argument("--output-seeds-csv", type=str, default=str(OUTPUT_SEEDS_CSV), help=f"Path to output CSV file recording all tested seeds and scores (default: {OUTPUT_SEEDS_CSV.name})")
     args_cli = parser.parse_args()
 
     vis_map_file = Path(args_cli.vis_map)
     output_txt = Path(args_cli.output_txt)
     output_json = Path(args_cli.output_json)
     output_plot = Path(args_cli.output_plot)
+    output_seeds_csv = Path(args_cli.output_seeds_csv)
 
     if not vis_map_file.exists():
         print(f"Error: input file not found at {vis_map_file}")
         sys.exit(1)
 
+    total_seeds = args_cli.total_seeds if args_cli.total_seeds is not None else args_cli.jobs
+
     print("=" * 60)
     print("PFS SA Scheduler (Numba JIT Multiprocessing Version)")
-    print(f"  Jobs: {args_cli.jobs}, Base Seed: {args_cli.seed}, Iterations: {args_cli.iter}")
+    print(f"  Jobs: {args_cli.jobs}, Base Seed: {args_cli.seed}, Total Seeds: {total_seeds}, Iterations: {args_cli.iter}")
     print(f"  Input NPZ: {vis_map_file}")
     print(f"  Output TXT: {output_txt}")
     print(f"  Output JSON: {output_json}")
     print(f"  Output Plot: {output_plot}")
+    print(f"  Output Seeds CSV: {output_seeds_csv}")
     print("=" * 60)
 
     # 1. データ読み込み
@@ -1371,8 +1542,9 @@ def main():
     print(f"\n[4] Simulated Annealing (JIT Multiprocessing with {args_cli.jobs} jobs)...")
     
     worker_args = []
-    for w_id in range(args_cli.jobs):
-        w_seed = args_cli.seed + w_id
+    for i in range(total_seeds):
+        w_seed = args_cli.seed + i
+        w_id = i % args_cli.jobs
         worker_args.append((
             w_id, w_seed, schedule, vis_map, teff_map, target_priority, target_category_code, target_n_slots,
             slot_night_idx, order_pairs_arr, co_adj_matrix, n_nights, fine_alt, fine_az,
@@ -1380,26 +1552,37 @@ def main():
             T0, ALPHA, args_cli.iter, T_MIN
         ))
     
-    with multiprocessing.Pool(processes=args_cli.jobs) as pool:
-        results = pool.map(worker_task, worker_args)
-    
-    # 最良の結果を選択
     best_schedule = None
     best_score = -9e18
     best_seed = -1
     best_worker = -1
     
-    print("\nAll workers finished. Results:")
-    for res_sched, res_score, res_seed in results:
-        w_id = res_seed - args_cli.seed
-        print(f"  [Worker {w_id}] Seed = {res_seed:4d}  Score = {res_score:.4f}")
-        if res_score > best_score:
-            best_score = res_score
-            best_schedule = res_sched.copy()
-            best_seed = res_seed
-            best_worker = w_id
+    import csv
+    output_seeds_csv.parent.mkdir(parents=True, exist_ok=True)
+    print(f"Saving all seeds, scores, and total_teff to {output_seeds_csv}...")
+    
+    with open(output_seeds_csv, "w", newline="") as f_csv:
+        writer = csv.writer(f_csv)
+        writer.writerow(["seed", "score", "total_teff"])
+        
+        with multiprocessing.Pool(processes=args_cli.jobs) as pool:
+            iterator = pool.imap_unordered(worker_task, worker_args)
+            from tqdm import tqdm
+            with tqdm(total=total_seeds, desc="Optimization Progress", unit="seed") as pbar:
+                for res_sched, res_score, res_teff, res_seed in iterator:
+                    writer.writerow([res_seed, res_score, res_teff])
+                    f_csv.flush()
+                    
+                    pbar.set_postfix(seed=res_seed, score=f"{res_score:.1f}", t_eff=f"{res_teff:.2f}")
+                    pbar.update(1)
+                    
+                    if res_score > best_score:
+                        best_score = res_score
+                        best_schedule = res_sched.copy()
+                        best_seed = res_seed
+                        best_worker = res_seed - args_cli.seed
             
-    print(f"\nSelected best result from [Worker {best_worker}] (Seed = {best_seed}) with Score = {best_score}")
+    print(f"\nSelected best result (Seed = {best_seed}) with Score = {best_score}")
     
     # スコア履歴のダミー（Numbaで可変長リスト出力を避けるため、簡易履歴を準備）
     score_history = [(0, best_score), (args_cli.iter, best_score)]

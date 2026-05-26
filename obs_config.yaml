@@ -39,8 +39,8 @@ slew:
 
 # Simulated Annealing (SA) hyperparameters and evaluation weights
 scheduler:
-  sa_t0: 500.0                 # Initial SA temperature
-  sa_alpha: 0.99999            # SA cooling rate (temperature decay factor)
+  sa_t0: 3000.0                # Initial SA temperature
+  sa_alpha: 0.999995           # SA cooling rate (temperature decay factor)
   sa_iterations: 1000000       # Number of iterations/loops per SA run
   sa_t_min: 0.5                # Final minimum temperature for stopping SA
   weight_hard: 1000000.0       # Penalty weight for physical/hard constraint violations (altitude, rotator limits, etc.)
