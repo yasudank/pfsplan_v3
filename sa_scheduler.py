@@ -52,6 +52,15 @@ MAX_PRIORITY = config['scheduler']['max_priority']
 MAX_OVERTIME_MIN = config['scheduler']['max_overtime_minutes']
 W_OVERTIME = config['scheduler']['weight_overtime']
 
+# Reheating パラメータ
+REHEAT_INTERVAL = config['scheduler']['sa_reheat_interval']
+REHEAT_FACTOR = config['scheduler']['sa_reheat_factor']
+REHEAT_CUTOFF = config['scheduler']['sa_reheat_cutoff']
+
+# Population SA パラメータ
+POPULATION_PHASES = config['scheduler']['population_phases']
+ELITE_FRACTION = config['scheduler']['elite_fraction']
+
 # 望遠鏡スルー速度
 SLEW_SPEED_AZ = config['slew']['speed_az']
 SLEW_SPEED_EL = config['slew']['speed_el']
@@ -471,6 +480,9 @@ def sa_optimize(
     T_MIN: float,
     seed: int,
     worker_id: int,
+    reheat_interval: int,
+    reheat_factor: float,
+    reheat_cutoff: float,
 ):
     np.random.seed(seed)
     n_slots = len(schedule)
@@ -506,10 +518,200 @@ def sa_optimize(
             valid_blocks_count += 1
             
     for iteration in range(1, N_ITER + 1):
+        # --- Reheating ---
+        if reheat_interval > 0 and iteration % reheat_interval == 0 and iteration < int(N_ITER * reheat_cutoff):
+            T = T0 * reheat_factor
+
         move_type = np.random.random()
         new_schedule = schedule.copy()
         
-        if move_type < 0.08:
+        if move_type < 0.04:
+            # Multi-night Ruin & Recreate (2-3 nights at once)
+            n_ruin = 2 + (np.random.randint(0, 2))  # 2 or 3 nights
+            if n_ruin > n_nights:
+                n_ruin = n_nights
+            # Pick n_ruin random nights
+            ruin_nights = np.zeros(n_ruin, dtype=np.int32)
+            for ri in range(n_ruin):
+                while True:
+                    d = np.random.randint(0, n_nights)
+                    is_dup = False
+                    for rj in range(ri):
+                        if ruin_nights[rj] == d:
+                            is_dup = True
+                            break
+                    if not is_dup:
+                        ruin_nights[ri] = d
+                        break
+            
+            # Find all assigned targets and their start slot indices
+            assigned = np.zeros(n_targets, dtype=np.bool_)
+            start_slot_index = np.full(n_targets, -1, dtype=np.int32)
+            for s in range(n_slots):
+                ti = new_schedule[s]
+                if ti >= 0:
+                    assigned[ti] = True
+                    if start_slot_index[ti] < 0:
+                        start_slot_index[ti] = s
+            
+            # Ruin: Clear all selected nights
+            for ri in range(n_ruin):
+                d = ruin_nights[ri]
+                s_start = night_slots_start[d]
+                s_end = night_slots_end[d]
+                for s in range(s_start, s_end):
+                    ti = new_schedule[s]
+                    if ti >= 0:
+                        assigned[ti] = False
+                        start_slot_index[ti] = -1
+                        new_schedule[s] = -1
+            
+            # Recreate: Greedy insertion for each ruined night
+            for ri in range(n_ruin):
+                d = ruin_nights[ri]
+                s_start = night_slots_start[d]
+                s_end = night_slots_end[d]
+                n_slots_in_night = s_end - s_start
+                k = 0
+                while k < n_slots_in_night:
+                    if new_schedule[s_start + k] >= 0:
+                        k += 1
+                        continue
+                    placed = False
+                    for ti in priority_order:
+                        if assigned[ti]:
+                            continue
+                        L = target_n_slots[ti]
+                        if k + L > n_slots_in_night:
+                            continue
+                        slots_ok = True
+                        for l_idx in range(L):
+                            if new_schedule[s_start + k + l_idx] >= 0:
+                                slots_ok = False
+                                break
+                        if not slots_ok:
+                            continue
+                        is_visible = True
+                        for l_idx in range(L):
+                            s = s_start + k + l_idx
+                            if vis_map[ti, s] == 0:
+                                is_visible = False
+                                break
+                        if not is_visible:
+                            continue
+                        has_unassigned_prior = False
+                        for ta in range(n_targets):
+                            if prior_matrix[ta, ti]:
+                                if not assigned[ta] or start_slot_index[ta] >= s_start + k:
+                                    has_unassigned_prior = True
+                                    break
+                        if has_unassigned_prior:
+                            continue
+                        if target_category_code[ti] == 2:
+                            has_ga = False
+                            for prev_k in range(k):
+                                prev_s = s_start + prev_k
+                                prev_ti = new_schedule[prev_s]
+                                if prev_ti >= 0 and target_category_code[prev_ti] == 1:
+                                    has_ga = True
+                                    break
+                            if has_ga:
+                                continue
+                        for l_idx in range(L):
+                            new_schedule[s_start + k + l_idx] = ti
+                        assigned[ti] = True
+                        start_slot_index[ti] = s_start + k
+                        k += L
+                        placed = True
+                        break
+                    if not placed:
+                        k += 1
+
+        elif move_type < 0.07:
+            # Category-based Ruin & Recreate
+            # Pick a random category to ruin (0=CO, 1=GA, 2=GE)
+            ruin_cat = np.random.randint(0, 3)
+            
+            assigned = np.zeros(n_targets, dtype=np.bool_)
+            start_slot_index = np.full(n_targets, -1, dtype=np.int32)
+            for s in range(n_slots):
+                ti = new_schedule[s]
+                if ti >= 0:
+                    assigned[ti] = True
+                    if start_slot_index[ti] < 0:
+                        start_slot_index[ti] = s
+            
+            # Remove all targets of the selected category
+            for s in range(n_slots):
+                ti = new_schedule[s]
+                if ti >= 0 and target_category_code[ti] == ruin_cat:
+                    assigned[ti] = False
+                    start_slot_index[ti] = -1
+                    new_schedule[s] = -1
+            
+            # Recreate: Insert targets of ruined category into empty slots
+            for d in range(n_nights):
+                s_start = night_slots_start[d]
+                s_end = night_slots_end[d]
+                n_slots_in_night = s_end - s_start
+                k = 0
+                while k < n_slots_in_night:
+                    if new_schedule[s_start + k] >= 0:
+                        k += 1
+                        continue
+                    placed = False
+                    for ti in priority_order:
+                        if assigned[ti]:
+                            continue
+                        if target_category_code[ti] != ruin_cat:
+                            continue
+                        L = target_n_slots[ti]
+                        if k + L > n_slots_in_night:
+                            continue
+                        slots_ok = True
+                        for l_idx in range(L):
+                            if new_schedule[s_start + k + l_idx] >= 0:
+                                slots_ok = False
+                                break
+                        if not slots_ok:
+                            continue
+                        is_visible = True
+                        for l_idx in range(L):
+                            s = s_start + k + l_idx
+                            if vis_map[ti, s] == 0:
+                                is_visible = False
+                                break
+                        if not is_visible:
+                            continue
+                        has_unassigned_prior = False
+                        for ta in range(n_targets):
+                            if prior_matrix[ta, ti]:
+                                if not assigned[ta] or start_slot_index[ta] >= s_start + k:
+                                    has_unassigned_prior = True
+                                    break
+                        if has_unassigned_prior:
+                            continue
+                        if target_category_code[ti] == 2:
+                            has_ga = False
+                            for prev_k in range(k):
+                                prev_s = s_start + prev_k
+                                prev_ti = new_schedule[prev_s]
+                                if prev_ti >= 0 and target_category_code[prev_ti] == 1:
+                                    has_ga = True
+                                    break
+                            if has_ga:
+                                continue
+                        for l_idx in range(L):
+                            new_schedule[s_start + k + l_idx] = ti
+                        assigned[ti] = True
+                        start_slot_index[ti] = s_start + k
+                        k += L
+                        placed = True
+                        break
+                    if not placed:
+                        k += 1
+
+        elif move_type < 0.13:
             # Ruin & Recreate a random night
             d = np.random.randint(0, n_nights)
             s_start = night_slots_start[d]
@@ -604,13 +806,13 @@ def sa_optimize(
                     if not placed:
                         k += 1
 
-        elif move_type < 0.12:
+        elif move_type < 0.17:
             s1 = np.random.randint(0, n_slots)
             s2 = np.random.randint(0, n_slots)
             if s1 != s2:
                 new_schedule[s1], new_schedule[s2] = schedule[s2], schedule[s1]
 
-        elif move_type < 0.32:
+        elif move_type < 0.35:
             if valid_blocks_count >= 2:
                 b1_idx = np.random.randint(0, valid_blocks_count)
                 b2_idx = np.random.randint(0, valid_blocks_count)
@@ -621,7 +823,7 @@ def sa_optimize(
                         new_schedule[b1], new_schedule[b2] = schedule[b2], schedule[b1]
                         new_schedule[b1+1], new_schedule[b2+1] = schedule[b2+1], schedule[b1+1]
 
-        elif move_type < 0.45:
+        elif move_type < 0.48:
             occupied = np.zeros(n_slots, dtype=np.int32)
             occ_count = 0
             for s in range(n_slots):
@@ -1355,32 +1557,34 @@ def calculate_schedule_teff(schedule, n_nights, night_slots_start, night_slots_e
 # ============================================================
 def worker_task(args):
     (
-        worker_id, seed, dummy_schedule, vis_map, teff_map, target_priority, target_category_code, target_n_slots,
+        worker_id, seed, initial_schedule, vis_map, teff_map, target_priority, target_category_code, target_n_slots,
         slot_night_idx, order_pairs_arr, co_adj_matrix, n_nights, fine_alt, fine_az,
         fine_rot, fine_teff, fine_night_minutes, night_slots_start, night_slots_end, co_indices_arr,
-        T0, ALPHA, N_ITER, T_MIN
+        T0, ALPHA, N_ITER, T_MIN, reheat_interval, reheat_factor, reheat_cutoff, use_greedy_init
     ) = args
 
     # Set random seed in worker process
     np.random.seed(seed)
 
-    # Generate perturbed priority order to diversify initial greedy schedules.
-    # priority ranges from 1 to 9 (lower is higher priority). Noise in [-0.4, 0.4] preserves strict priority order
-    # but randomizes relative order of targets within the same priority level.
-    perturbed_priority = target_priority.astype(np.float64) + np.random.uniform(-0.4, 0.4, size=len(target_priority))
-    priority_order = np.argsort(perturbed_priority)
+    if use_greedy_init:
+        # Generate perturbed priority order to diversify initial greedy schedules.
+        perturbed_priority = target_priority.astype(np.float64) + np.random.uniform(-0.4, 0.4, size=len(target_priority))
+        priority_order = np.argsort(perturbed_priority)
 
-    # Generate the personalized randomized greedy initial schedule for this seed
-    schedule = greedy_initial_schedule(
-        target_priority, target_category_code, target_n_slots, slot_night_idx, order_pairs_arr,
-        fine_alt, fine_az, fine_rot, fine_night_minutes, night_slots_start, night_slots_end, priority_order
-    )
+        # Generate the personalized randomized greedy initial schedule for this seed
+        schedule = greedy_initial_schedule(
+            target_priority, target_category_code, target_n_slots, slot_night_idx, order_pairs_arr,
+            fine_alt, fine_az, fine_rot, fine_night_minutes, night_slots_start, night_slots_end, priority_order
+        )
+    else:
+        # Use provided initial schedule (from elite in population SA)
+        schedule = initial_schedule.copy()
 
     best_sched, best_score = sa_optimize(
         schedule, vis_map, teff_map, target_priority, target_category_code, target_n_slots, slot_night_idx,
         order_pairs_arr, co_adj_matrix, n_nights, fine_alt, fine_az, fine_rot, fine_teff,
         fine_night_minutes, night_slots_start, night_slots_end, co_indices_arr,
-        T0, ALPHA, N_ITER, T_MIN, seed, worker_id
+        T0, ALPHA, N_ITER, T_MIN, seed, worker_id, reheat_interval, reheat_factor, reheat_cutoff
     )
     
     teff = calculate_schedule_teff(
@@ -1534,104 +1738,112 @@ def main():
     sa_optimize(
         schedule, vis_map, teff_map, target_priority, target_category_code, target_n_slots, slot_night_idx, order_pairs_arr, co_adj_matrix, n_nights,
         fine_alt, fine_az, fine_rot, fine_teff, fine_night_minutes, night_slots_start, night_slots_end, co_indices_arr,
-        T0, ALPHA, 1, T_MIN, 42, -1
+        T0, ALPHA, 1, T_MIN, 42, -1, REHEAT_INTERVAL, REHEAT_FACTOR, REHEAT_CUTOFF
     )
     print("  Compilation finished.")
 
-    # 4. マルチプロセスアニーリング実行
-    print(f"\n[4] Simulated Annealing (JIT Multiprocessing with {args_cli.jobs} jobs)...")
+    # 4. Population-based SA (多フェーズ実行)
+    n_phases = POPULATION_PHASES
+    iter_per_phase = args_cli.iter // n_phases
+    n_elite = max(1, int(total_seeds * ELITE_FRACTION))
     
-    worker_args = []
-    for i in range(total_seeds):
-        w_seed = args_cli.seed + i
-        w_id = i % args_cli.jobs
-        worker_args.append((
-            w_id, w_seed, schedule, vis_map, teff_map, target_priority, target_category_code, target_n_slots,
-            slot_night_idx, order_pairs_arr, co_adj_matrix, n_nights, fine_alt, fine_az,
-            fine_rot, fine_teff, fine_night_minutes, night_slots_start, night_slots_end, co_indices_arr,
-            T0, ALPHA, args_cli.iter, T_MIN
-        ))
-    
-    best_schedule = None
-    best_score = -9e18
-    best_seed = -1
-    best_worker = -1
+    print(f"\n[4] Population-based SA ({n_phases} phases x {iter_per_phase} iter/phase, {total_seeds} workers, top {n_elite} elite)...")
     
     import csv
     output_seeds_csv.parent.mkdir(parents=True, exist_ok=True)
-    print(f"Saving all seeds, scores, and total_teff to {output_seeds_csv}...")
+    
+    # Phase 1: All workers start from greedy initial schedules
+    all_results = []  # List of (schedule, score, teff, seed) for current population
+    seed_counter = args_cli.seed
     
     with open(output_seeds_csv, "w", newline="") as f_csv:
         writer = csv.writer(f_csv)
-        writer.writerow(["seed", "score", "total_teff"])
+        writer.writerow(["phase", "seed", "score", "total_teff"])
         
-        with multiprocessing.Pool(processes=args_cli.jobs) as pool:
-            iterator = pool.imap_unordered(worker_task, worker_args)
-            from tqdm import tqdm
-            with tqdm(total=total_seeds, desc="Optimization Progress", unit="seed") as pbar:
-                for res_sched, res_score, res_teff, res_seed in iterator:
-                    writer.writerow([res_seed, res_score, res_teff])
-                    f_csv.flush()
-                    
-                    pbar.set_postfix(seed=res_seed, score=f"{res_score:.1f}", t_eff=f"{res_teff:.2f}")
-                    pbar.update(1)
-                    
-                    if res_score > best_score:
-                        best_score = res_score
-                        best_schedule = res_sched.copy()
-                        best_seed = res_seed
-                        best_worker = res_seed - args_cli.seed
+        for phase in range(1, n_phases + 1):
+            # Determine temperature for this phase
+            if phase == 1:
+                phase_T0 = T0
+            else:
+                # Later phases start from a lower temperature since we already have good solutions
+                phase_T0 = T0 * (REHEAT_FACTOR ** (phase - 1))
+                phase_T0 = max(phase_T0, T0 * 0.05)  # Don't go too low
             
+            print(f"\n  --- Phase {phase}/{n_phases} (T0={phase_T0:.1f}, {iter_per_phase} iterations) ---")
+            
+            worker_args = []
+            for i in range(total_seeds):
+                w_seed = seed_counter
+                seed_counter += 1
+                w_id = i
+                
+                if phase == 1:
+                    # Phase 1: all start from greedy
+                    worker_args.append((
+                        w_id, w_seed, schedule, vis_map, teff_map, target_priority, target_category_code, target_n_slots,
+                        slot_night_idx, order_pairs_arr, co_adj_matrix, n_nights, fine_alt, fine_az,
+                        fine_rot, fine_teff, fine_night_minutes, night_slots_start, night_slots_end, co_indices_arr,
+                        phase_T0, ALPHA, iter_per_phase, T_MIN, REHEAT_INTERVAL, REHEAT_FACTOR, REHEAT_CUTOFF, True
+                    ))
+                else:
+                    # Later phases: elite workers keep their schedule, others restart from a random elite
+                    if i < n_elite:
+                        # Elite: continue from own best schedule
+                        init_sched = all_results[i][0]
+                    else:
+                        # Non-elite: restart from a random elite schedule
+                        elite_idx = i % n_elite
+                        init_sched = all_results[elite_idx][0]
+                    
+                    worker_args.append((
+                        w_id, w_seed, init_sched, vis_map, teff_map, target_priority, target_category_code, target_n_slots,
+                        slot_night_idx, order_pairs_arr, co_adj_matrix, n_nights, fine_alt, fine_az,
+                        fine_rot, fine_teff, fine_night_minutes, night_slots_start, night_slots_end, co_indices_arr,
+                        phase_T0, ALPHA, iter_per_phase, T_MIN, REHEAT_INTERVAL, REHEAT_FACTOR, REHEAT_CUTOFF, False
+                    ))
+            
+            phase_results = []
+            with multiprocessing.Pool(processes=args_cli.jobs) as pool:
+                iterator = pool.imap_unordered(worker_task, worker_args)
+                from tqdm import tqdm
+                with tqdm(total=total_seeds, desc=f"Phase {phase}/{n_phases}", unit="worker") as pbar:
+                    for res_sched, res_score, res_teff, res_seed in iterator:
+                        phase_results.append((res_sched, res_score, res_teff, res_seed))
+                        writer.writerow([phase, res_seed, res_score, res_teff])
+                        f_csv.flush()
+                        pbar.set_postfix(seed=res_seed, score=f"{res_score:.1f}", t_eff=f"{res_teff:.2f}")
+                        pbar.update(1)
+            
+            # Sort by score descending — elite are the top ones
+            phase_results.sort(key=lambda x: x[1], reverse=True)
+            all_results = phase_results
+            
+            scores = [r[1] for r in phase_results]
+            print(f"  Phase {phase} scores: best={scores[0]:.1f}, median={scores[len(scores)//2]:.1f}, worst={scores[-1]:.1f}, std={np.std(scores):.1f}")
+    
+    # Best overall result
+    best_schedule = all_results[0][0]
+    best_score = all_results[0][1]
+    best_seed = all_results[0][3]
+    
     print(f"\nSelected best result (Seed = {best_seed}) with Score = {best_score}")
     
-    # スコア履歴のダミー（Numbaで可変長リスト出力を避けるため、簡易履歴を準備）
+    # スコア履歴のダミー
     score_history = [(0, best_score), (args_cli.iter, best_score)]
 
-    # 4. テキスト出力
-    print("\n[4] Writing text schedule...")
+    # 5. テキスト出力
+    print("\n[5] Writing text schedule...")
     text = format_schedule_text(best_schedule, data)
     with open(output_txt, "w") as f:
         f.write(text)
     print(text)
     print(f"  Saved: {output_txt}")
 
-    # 5. JSON出力
-    # 実際の teff 合計を計算
-    actual_teff_total = 0.0
-    slot_start_temp = 0
-    night_n_slots = data["night_n_slots"]
-
-    for n_idx, n_slots_n in enumerate(night_n_slots):
-        accum_delay = 0.0
-        last_tgt = -1
-        for s in range(n_slots_n):
-            si = slot_start_temp + s
-            ti = best_schedule[si]
-            if ti >= 0:
-                if last_tgt >= 0 and ti != last_tgt:
-                    m1 = (s - 1) * 20
-                    m2 = s * 20
-                    t_s = calculate_slew_time(
-                        fine_alt[last_tgt, n_idx, m1], fine_az[last_tgt, n_idx, m1], fine_rot[last_tgt, n_idx, m1],
-                        fine_alt[ti, n_idx, m2], fine_az[ti, n_idx, m2], fine_rot[ti, n_idx, m2]
-                    )
-                    accum_delay += t_s
-                st_sec = s * 1200.0 + accum_delay
-                st_min = int(st_sec // 60)
-                ed_min = int((st_sec + 900.0) // 60)
-                n_len = fine_night_minutes[n_idx]
-                if ed_min < n_len:
-                    alts = fine_alt[ti, n_idx, st_min : ed_min + 1]
-                    rots = fine_rot[ti, n_idx, st_min : ed_min + 1]
-                    is_visible_alt = np.all(alts >= 32.5) and np.all(alts <= 75.0)
-                    is_visible_rot = np.all(rots >= -174.0) and np.all(rots <= 174.0)
-                    r_start = rots[0]
-                    r_end = rots[-1]
-                    cross_180 = (r_start * r_end < 0) and (abs(r_start) + abs(r_end) > 180.0)
-                    if is_visible_alt and is_visible_rot and not cross_180:
-                        actual_teff_total += np.mean(fine_teff[ti, n_idx, st_min : ed_min + 1])
-                last_tgt = ti
-        slot_start_temp += n_slots_n
+    # 6. JSON出力
+    actual_teff_total = calculate_schedule_teff(
+        best_schedule, n_nights, night_slots_start, night_slots_end,
+        fine_alt, fine_az, fine_rot, fine_teff, fine_night_minutes
+    )
 
     result_json = {
         "score": float(best_score),
@@ -1649,8 +1861,8 @@ def main():
         json.dump(result_json, f, indent=2)
     print(f"  JSON saved: {output_json}")
 
-    # 6. ガントチャート
-    print("\n[5] Plotting schedule...")
+    # 7. ガントチャート
+    print("\n[7] Plotting schedule...")
     plot_schedule(best_schedule, data, score_history, output_plot)
 
     print("\n" + "=" * 60)

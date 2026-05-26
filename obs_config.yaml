@@ -53,4 +53,9 @@ scheduler:
   max_priority: 4              # Maximum scientific priority value considered by the scheduler
   max_overtime_minutes: 10     # Maximum allowed observation extension beyond night length in minutes
   weight_overtime: 1000.0      # Penalty weight per minute of overtime extension
+  sa_reheat_interval: 250000   # Number of iterations between reheating events
+  sa_reheat_factor: 0.3        # Fraction of T0 to reheat to (e.g. 0.3 = reheat to 30% of T0)
+  sa_reheat_cutoff: 0.8        # Stop reheating after this fraction of total iterations
+  population_phases: 4         # Number of phases for population-based SA
+  elite_fraction: 0.5          # Fraction of top workers whose schedules are kept (rest restart from elite)
 
