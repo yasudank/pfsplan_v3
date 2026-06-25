@@ -278,7 +278,29 @@ def load_targets(targets_dir: Path) -> Table:
         ecsv_file = cat_dir / "ppcList.ecsv"
         if not ecsv_file.exists():
             continue
-        t = Table.read(ecsv_file)
+        try:
+            t = Table.read(ecsv_file)
+        except Exception:
+            # Fallback: if ECSV reading fails (e.g. due to YAML metadata format issue),
+            # read the file lines and strip the 'meta' block from the header.
+            lines = []
+            in_meta = False
+            with open(ecsv_file, "r") as f:
+                for line in f:
+                    if line.startswith("#"):
+                        stripped = line[1:].strip()
+                        if stripped.startswith("meta:"):
+                            in_meta = True
+                            continue
+                        if in_meta:
+                            if stripped.startswith("-") or stripped.startswith(" ") or not stripped:
+                                continue
+                            else:
+                                in_meta = False
+                        lines.append(line)
+                    else:
+                        lines.append(line)
+            t = Table.read(lines, format="ascii.ecsv")
         if "ppc_exptime" in t.colnames:
             t = t[t["ppc_exptime"] >= 900]
         t["category"] = cat_dir.name
