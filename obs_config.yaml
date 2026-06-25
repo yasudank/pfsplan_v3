@@ -58,9 +58,10 @@ scheduler:
   sa_reheat_cutoff: 0.8        # Stop reheating after this fraction of total iterations
   population_phases: 4         # Number of phases for population-based SA
   elite_fraction: 0.5          # Fraction of top workers whose schedules are kept (rest restart from elite)
-  target_ratio_co: 0.20        # Target slot ratio for CO category
-  target_ratio_ga: 0.60        # Target slot ratio for GA category
-  target_ratio_ge: 0.20        # Target slot ratio for GE category
+  target_ratio_co: 0.50        # Target slot ratio for CO category
+  target_ratio_ga: 0.00        # Target slot ratio for GA category
+  target_ratio_ge: 0.50        # Target slot ratio for GE category
   target_ratio_tolerance: 0.05 # Allowed tolerance (+/- 5%)
   weight_ratio_penalty: 50000.0 # Penalty weight for ratio deviations exceeding tolerance
+  normalize_priority_by_category: true # Normalize priorities within each category to [1, max_priority] range
 

@@ -1789,6 +1789,34 @@ def main():
 
     # CO隣接関係
     target_category = data["target_category"]
+    
+    # Normalize target priorities within each category to [1, MAX_PRIORITY] range if configured
+    normalize_priorities = config.get('scheduler', {}).get('normalize_priority_by_category', True)
+    if normalize_priorities:
+        print("  Normalizing priorities within each category...")
+        categories = np.unique(target_category)
+        new_priority = np.zeros_like(target_priority)
+        for cat in categories:
+            idx = np.where(target_category == cat)[0]
+            if len(idx) == 0:
+                continue
+            pri_cat = target_priority[idx]
+            unique_pris = sorted(np.unique(pri_cat))
+            n_unique = len(unique_pris)
+            if str(cat) == "GE":
+                new_priority[idx] = 1
+            elif n_unique <= 1:
+                new_priority[idx] = 1
+            else:
+                for i, p in enumerate(pri_cat):
+                    rank = unique_pris.index(p)
+                    mapped = 1 + int(round(rank * 3 / (n_unique - 1)))
+                    new_priority[idx[i]] = mapped
+            orig_unique = sorted(np.unique(data["target_priority"][idx].astype(int)))
+            mapped_unique = sorted(np.unique(new_priority[idx].astype(int)))
+            print(f"    Category {str(cat):2s}: unique priorities {orig_unique} mapped to {mapped_unique}")
+        target_priority = new_priority
+    
     n_nights = len(data["night_names"])
     co_indices = [i for i in range(n_targets) if str(target_category[i]) == "CO"]
     co_indices_arr = np.array(co_indices, dtype=np.int32)
