@@ -64,4 +64,5 @@ scheduler:
   target_ratio_tolerance: 0.05 # Allowed tolerance (+/- 5%)
   weight_ratio_penalty: 50000.0 # Penalty weight for ratio deviations exceeding tolerance
   normalize_priority_by_category: true # Normalize priorities within each category to [1, max_priority] range
+  enforce_ge_priority_as_order: true   # Treat GE target priorities as sequential order constraints (1 before 2, etc.)
 

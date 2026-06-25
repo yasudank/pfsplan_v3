@@ -1784,11 +1784,23 @@ def main():
             for i in range(len(idxs) - 1):
                 for j in range(i + 1, len(idxs)):
                     order_pairs.append((idxs[i], idxs[j]))
-    order_pairs_arr = np.array(order_pairs, dtype=np.int32) if len(order_pairs) > 0 else np.zeros((0, 2), dtype=np.int32)
-    print(f"  Detected {len(order_pairs)} target pairs requiring order preservation.")
 
     # CO隣接関係
     target_category = data["target_category"]
+    
+    # Treat GE target priorities as sequential order constraints if configured
+    enforce_ge_order = config.get('scheduler', {}).get('enforce_ge_priority_as_order', False)
+    if enforce_ge_order:
+        print("  Enforcing GE priorities as sequential order constraints...")
+        ge_indices = [i for i in range(n_targets) if str(target_category[i]) == "GE"]
+        if len(ge_indices) > 0:
+            # Sort GE targets by their original priority (from data["target_priority"])
+            ge_sorted = sorted(ge_indices, key=lambda i: int(data["target_priority"][i]))
+            for i in range(len(ge_sorted) - 1):
+                order_pairs.append((ge_sorted[i], ge_sorted[i+1]))
+                
+    order_pairs_arr = np.array(order_pairs, dtype=np.int32) if len(order_pairs) > 0 else np.zeros((0, 2), dtype=np.int32)
+    print(f"  Detected {len(order_pairs)} target pairs requiring order preservation.")
     
     # Normalize target priorities within each category to [1, MAX_PRIORITY] range if configured
     normalize_priorities = config.get('scheduler', {}).get('normalize_priority_by_category', True)
