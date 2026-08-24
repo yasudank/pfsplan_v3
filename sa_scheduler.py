@@ -67,6 +67,8 @@ TARGET_RATIO_GA = config['scheduler'].get('target_ratio_ga', 0.60)
 TARGET_RATIO_GE = config['scheduler'].get('target_ratio_ge', 0.20)
 RATIO_TOLERANCE = config['scheduler'].get('target_ratio_tolerance', 0.05)
 W_RATIO_PENALTY = config['scheduler'].get('weight_ratio_penalty', 50000.0)
+W_POINTING_SWITCH = config['scheduler'].get('weight_pointing_switch', 2000.0)
+W_CATEGORY_SWITCH = config['scheduler'].get('weight_category_switch', 50000.0)
 
 # 望遠鏡スルー速度
 SLEW_SPEED_AZ = config['slew']['speed_az']
@@ -136,6 +138,8 @@ def compute_score(
     schedule: np.ndarray,
     target_priority: np.ndarray,
     target_category_code: np.ndarray,
+    target_n_slots: np.ndarray,
+    target_pointing_id: np.ndarray,
     slot_night_idx: np.ndarray,
     order_pairs_arr: np.ndarray,
     co_adj_matrix: np.ndarray,
@@ -281,26 +285,49 @@ def compute_score(
 
     score = -W_HARD * (hard_violations + order_violations + ga_ge_violations)
 
-    # 4. 優先度ボーナスと分割ペナルティ
+    # 4. 優先度ボーナス、不完全割当ペナルティ、分割ペナルティ
+    tgt_obs_slots = np.zeros(n_targets, dtype=np.int32)
+    tgt_max_consecutive = np.zeros(n_targets, dtype=np.int32)
+    tgt_last_slot = np.full(n_targets, -1, dtype=np.int32)
+    tgt_current_consecutive = np.zeros(n_targets, dtype=np.int32)
+
     split_penalties = 0
-    observed_count = 0
+    for s in range(n_slots):
+        ti = schedule[s]
+        if ti >= 0 and slot_success[s]:
+            tgt_obs_slots[ti] += 1
+            last_s = tgt_last_slot[ti]
+            if last_s >= 0:
+                if (s - last_s == 1) and (slot_night_idx[s] == slot_night_idx[last_s]):
+                    tgt_current_consecutive[ti] += 1
+                else:
+                    tgt_current_consecutive[ti] = 1
+                    split_penalties += 1
+            else:
+                tgt_current_consecutive[ti] = 1
+
+            if tgt_current_consecutive[ti] > tgt_max_consecutive[ti]:
+                tgt_max_consecutive[ti] = tgt_current_consecutive[ti]
+            tgt_last_slot[ti] = s
+
+    incomplete_penalties = 0
     for ti in range(n_targets):
-        prev_s = -1
-        has_obs = False
-        for s in range(n_slots):
-            if schedule[s] == ti and slot_success[s]:
-                if not has_obs:
-                    has_obs = True
-                    observed_count += 1
-                    pri = target_priority[ti]
-                    score += W_PRIORITY_BASE * (MAX_PRIORITY - pri + 1)
-                
-                if prev_s >= 0:
-                    if (s - prev_s != 1) or (slot_night_idx[s] != slot_night_idx[prev_s]):
-                        split_penalties += 1
-                prev_s = s
-                
+        req_L = target_n_slots[ti]
+        n_obs = tgt_obs_slots[ti]
+        if n_obs > 0:
+            if tgt_max_consecutive[ti] >= req_L:
+                pri = target_priority[ti]
+                if target_category_code[ti] == 2:
+                    pri = 1
+                score += W_PRIORITY_BASE * (MAX_PRIORITY - pri + 1) * req_L
+                if n_obs > req_L:
+                    split_penalties += (n_obs - req_L)
+            else:
+                # 必要な連続スロット数に満たない不完全な割り当て
+                incomplete_penalties += n_obs
+
     score -= W_SPLIT * split_penalties
+    score -= W_EMPTY * incomplete_penalties  # 不完全割当スロットには空きスロットペナルティと同等以上の減点
     score += W_TEFF * teff_sum
     score -= W_SLEW * total_slew_time  # 合計スルー時間を減点
     score -= W_OVERTIME * total_overtime
@@ -356,6 +383,44 @@ def compute_score(
 
             score -= (diff_co + diff_ga + diff_ge) * W_RATIO_PENALTY
 
+    # 7. ポインティング切り替えペナルティ (同一カテゴリ内でのポインティング行き来を抑制)
+    if W_POINTING_SWITCH > 0.0:
+        pointing_switches = 0
+        for d in range(n_nights):
+            s_start = night_slots_start[d]
+            s_end = night_slots_end[d]
+            last_pid = -1
+            last_cat = -1
+            for s in range(s_start, s_end):
+                ti = schedule[s]
+                if ti >= 0 and slot_success[s]:
+                    pid = target_pointing_id[ti]
+                    cat = target_category_code[ti]
+                    if last_pid >= 0 and cat == last_cat and pid != last_pid:
+                        pointing_switches += 1
+                    last_pid = pid
+                    last_cat = cat
+        score -= W_POINTING_SWITCH * pointing_switches
+
+    # 8. カテゴリ切り替えペナルティ (各夜におけるCO/GA/GEの切り替えを最大1回に制限)
+    if W_CATEGORY_SWITCH > 0.0:
+        excess_cat_switches = 0
+        for d in range(n_nights):
+            s_start = night_slots_start[d]
+            s_end = night_slots_end[d]
+            last_cat = -1
+            switches_in_night = 0
+            for s in range(s_start, s_end):
+                ti = schedule[s]
+                if ti >= 0 and slot_success[s]:
+                    cat = target_category_code[ti]
+                    if last_cat >= 0 and cat != last_cat:
+                        switches_in_night += 1
+                    last_cat = cat
+            if switches_in_night > 1:
+                excess_cat_switches += (switches_in_night - 1)
+        score -= W_CATEGORY_SWITCH * excess_cat_switches
+
     return score
 
 @njit
@@ -363,6 +428,7 @@ def greedy_initial_schedule(
     target_priority: np.ndarray,
     target_category_code: np.ndarray,
     target_n_slots: np.ndarray,
+    target_pointing_id: np.ndarray,
     slot_night_idx: np.ndarray,
     order_pairs_arr: np.ndarray,
     fine_alt: np.ndarray,
@@ -385,6 +451,8 @@ def greedy_initial_schedule(
         prior_matrix[ta, tb] = True
 
     n_nights = len(fine_night_minutes)
+    last_global_pid = -1
+    last_global_cat = -1
 
     for d in range(n_nights):
         s_start = night_slots_start[d]
@@ -395,92 +463,120 @@ def greedy_initial_schedule(
 
         accumulated_slew_delay = 0.0
         last_target = -1
+        current_pid = -1
+        current_cat = -1
+        night_cat_switches = 0
 
         k = 0
         while k < n_slots_in_night:
             placed = False
-            for ti in priority_order:
-                if assigned[ti]:
-                    continue
 
-                has_unassigned_prior = False
-                for ta in range(n_targets):
-                    if prior_matrix[ta, ti] and not assigned[ta]:
-                        has_unassigned_prior = True
-                        break
-                if has_unassigned_prior:
-                    continue
-
-                L = target_n_slots[ti]
-                if k + L > n_slots_in_night:
-                    continue
-
-                if target_category_code[ti] == 2:
-                    has_ga = False
-                    for prev_k in range(k):
-                        prev_s = s_start + prev_k
-                        prev_ti = schedule[prev_s]
-                        if prev_ti >= 0 and target_category_code[prev_ti] == 1:
-                            has_ga = True
-                            break
-                    if has_ga:
+            # パス0: 直前と同じポインティングの未割当天体を最優先
+            # パス1: 通常の優先度順で探索
+            for pass_idx in range(2):
+                if placed:
+                    break
+                for ti in priority_order:
+                    if assigned[ti]:
                         continue
 
-                temp_delay = accumulated_slew_delay
-                if last_target >= 0 and ti != last_target:
-                    m1 = (k - 1) * 20
-                    m2 = k * 20
-                    alt1 = fine_alt[last_target, d, m1]
-                    az1 = fine_az[last_target, d, m1]
-                    rot1 = fine_rot[last_target, d, m1]
+                    ti_cat = target_category_code[ti]
+                    ti_pid = target_pointing_id[ti]
 
-                    alt2 = fine_alt[ti, d, m2]
-                    az2 = fine_az[ti, d, m2]
-                    rot2 = fine_rot[ti, d, m2]
+                    if pass_idx == 0:
+                        if current_pid < 0 or ti_pid != current_pid or ti_cat != current_cat:
+                            continue
 
-                    az_diff = (az2 - az1 + 180.0) % 360.0 - 180.0
-                    alt_diff = alt2 - alt1
-                    rot_diff = rot2 - rot1
-                    t_slew = max(abs(az_diff) / 0.5, abs(alt_diff) / 0.5, abs(rot_diff) / 1.5)
-                    temp_delay += t_slew
+                    # すでにその夜で1回カテゴリが切り替わっている場合、さらに新しいカテゴリへの切り替えは禁止
+                    if current_cat >= 0 and ti_cat != current_cat:
+                        if night_cat_switches >= 1:
+                            continue
 
-                start_sec = k * 1200.0 + temp_delay
-                start_min = int(start_sec // 60)
-                exp_end_min = int((start_sec + L * 1200.0 - 300.0) // 60)
+                    has_unassigned_prior = False
+                    for ta in range(n_targets):
+                        if prior_matrix[ta, ti] and not assigned[ta]:
+                            has_unassigned_prior = True
+                            break
+                    if has_unassigned_prior:
+                        continue
 
-                night_len = fine_night_minutes[d]
-                if exp_end_min >= night_len:
-                    continue
+                    L = target_n_slots[ti]
+                    if k + L > n_slots_in_night:
+                        continue
 
-                is_visible = True
-                for m in range(start_min, exp_end_min + 1):
-                    val = fine_alt[ti, d, m]
-                    if val < 32.5 or val > 75.0:
-                        is_visible = False
-                        break
-                
-                if is_visible:
+                    if ti_cat == 2:
+                        has_ga = False
+                        for prev_k in range(k):
+                            prev_s = s_start + prev_k
+                            prev_ti = schedule[prev_s]
+                            if prev_ti >= 0 and target_category_code[prev_ti] == 1:
+                                has_ga = True
+                                break
+                        if has_ga:
+                            continue
+
+                    temp_delay = accumulated_slew_delay
+                    if last_target >= 0 and ti != last_target:
+                        m1 = (k - 1) * 20
+                        m2 = k * 20
+                        alt1 = fine_alt[last_target, d, m1]
+                        az1 = fine_az[last_target, d, m1]
+                        rot1 = fine_rot[last_target, d, m1]
+
+                        alt2 = fine_alt[ti, d, m2]
+                        az2 = fine_az[ti, d, m2]
+                        rot2 = fine_rot[ti, d, m2]
+
+                        az_diff = (az2 - az1 + 180.0) % 360.0 - 180.0
+                        alt_diff = alt2 - alt1
+                        rot_diff = rot2 - rot1
+                        t_slew = max(abs(az_diff) / 0.5, abs(alt_diff) / 0.5, abs(rot_diff) / 1.5)
+                        temp_delay += t_slew
+
+                    start_sec = k * 1200.0 + temp_delay
+                    start_min = int(start_sec // 60)
+                    exp_end_min = int((start_sec + L * 1200.0 - 300.0) // 60)
+
+                    night_len = fine_night_minutes[d]
+                    if exp_end_min >= night_len:
+                        continue
+
+                    is_visible = True
                     for m in range(start_min, exp_end_min + 1):
-                        val = fine_rot[ti, d, m]
-                        if val < -174.0 or val > 174.0:
+                        val = fine_alt[ti, d, m]
+                        if val < 32.5 or val > 75.0:
                             is_visible = False
                             break
-                            
-                if is_visible:
-                    r_start = fine_rot[ti, d, start_min]
-                    r_end = fine_rot[ti, d, exp_end_min]
-                    if (r_start * r_end < 0) and (abs(r_start) + abs(r_end) > 180.0):
-                        is_visible = False
+                    
+                    if is_visible:
+                        for m in range(start_min, exp_end_min + 1):
+                            val = fine_rot[ti, d, m]
+                            if val < -174.0 or val > 174.0:
+                                is_visible = False
+                                break
+                                
+                    if is_visible:
+                        r_start = fine_rot[ti, d, start_min]
+                        r_end = fine_rot[ti, d, exp_end_min]
+                        if (r_start * r_end < 0) and (abs(r_start) + abs(r_end) > 180.0):
+                            is_visible = False
 
-                if is_visible:
-                    for l_idx in range(L):
-                        schedule[s_start + k + l_idx] = ti
-                    assigned[ti] = True
-                    accumulated_slew_delay = temp_delay
-                    last_target = ti
-                    k += L
-                    placed = True
-                    break
+                    if is_visible:
+                        for l_idx in range(L):
+                            schedule[s_start + k + l_idx] = ti
+                        assigned[ti] = True
+                        accumulated_slew_delay = temp_delay
+                        last_target = ti
+                        new_cat = target_category_code[ti]
+                        if current_cat >= 0 and new_cat != current_cat:
+                            night_cat_switches += 1
+                        current_pid = target_pointing_id[ti]
+                        current_cat = new_cat
+                        last_global_pid = current_pid
+                        last_global_cat = current_cat
+                        k += L
+                        placed = True
+                        break
 
             if not placed:
                 accumulated_slew_delay = max(0.0, accumulated_slew_delay - 1200.0)
@@ -497,6 +593,7 @@ def sa_optimize(
     target_priority: np.ndarray,
     target_category_code: np.ndarray,
     target_n_slots: np.ndarray,
+    target_pointing_id: np.ndarray,
     slot_night_idx: np.ndarray,
     order_pairs_arr: np.ndarray,
     co_adj_matrix: np.ndarray,
@@ -533,11 +630,14 @@ def sa_optimize(
     # Generate perturbed priority order for randomized greedy recreation
     perturbed_priority = np.zeros(n_targets, dtype=np.float64)
     for i in range(n_targets):
-        perturbed_priority[i] = float(target_priority[i]) + np.random.uniform(-0.4, 0.4)
+        if target_category_code[i] == 2: # GE target
+            perturbed_priority[i] = -100.0 + float(target_priority[i])
+        else:
+            perturbed_priority[i] = float(target_priority[i]) + np.random.uniform(-0.4, 0.4)
     priority_order = np.argsort(perturbed_priority)
     
     current_score = compute_score(
-        schedule, target_priority, target_category_code, slot_night_idx, order_pairs_arr, co_adj_matrix, n_nights,
+        schedule, target_priority, target_category_code, target_n_slots, target_pointing_id, slot_night_idx, order_pairs_arr, co_adj_matrix, n_nights,
         fine_alt, fine_az, fine_rot, fine_teff, fine_night_minutes, night_slots_start, night_slots_end, co_indices
     )
     best_schedule = schedule.copy()
@@ -845,7 +945,12 @@ def sa_optimize(
             s1 = np.random.randint(0, n_slots)
             s2 = np.random.randint(0, n_slots)
             if s1 != s2:
-                new_schedule[s1], new_schedule[s2] = schedule[s2], schedule[s1]
+                ti1 = schedule[s1]
+                ti2 = schedule[s2]
+                l1 = target_n_slots[ti1] if ti1 >= 0 else 1
+                l2 = target_n_slots[ti2] if ti2 >= 0 else 1
+                if l1 == 1 and l2 == 1:
+                    new_schedule[s1], new_schedule[s2] = schedule[s2], schedule[s1]
 
         elif move_type < 0.35:
             if valid_blocks_count >= 2:
@@ -1180,7 +1285,7 @@ def sa_optimize(
                             new_schedule[s1] = co
 
         new_score = compute_score(
-            new_schedule, target_priority, target_category_code, slot_night_idx, order_pairs_arr, co_adj_matrix, n_nights,
+            new_schedule, target_priority, target_category_code, target_n_slots, target_pointing_id, slot_night_idx, order_pairs_arr, co_adj_matrix, n_nights,
             fine_alt, fine_az, fine_rot, fine_teff, fine_night_minutes, night_slots_start, night_slots_end, co_indices
         )
         delta = new_score - current_score
@@ -1360,11 +1465,16 @@ def format_schedule_text(schedule: np.ndarray, data: dict) -> str:
     lines.append("  SUMMARY")
     lines.append(sep)
     
+    slot_sec = config['scheduling']['slot_duration_minutes'] * 60
+    target_exptime = data["target_exptime"].astype(np.int32)
+    target_n_slots = np.maximum(np.ceil(target_exptime / slot_sec).astype(np.int32), 1)
+
     obs_ti_success = set()
     slot_start_temp = 0
     for n_idx, n_slots_n in enumerate(night_n_slots):
         accum_delay = 0.0
         last_tgt = -1
+        night_success = np.zeros(n_slots_n, dtype=bool)
         for s in range(n_slots_n):
             si = slot_start_temp + s
             ti = schedule[si]
@@ -1390,8 +1500,29 @@ def format_schedule_text(schedule: np.ndarray, data: dict) -> str:
                     r_end = rots[-1]
                     cross_180 = (r_start * r_end < 0) and (abs(r_start) + abs(r_end) > 180.0)
                     if is_visible_alt and is_visible_rot and not cross_180:
-                        obs_ti_success.add(ti)
+                        night_success[s] = True
                 last_tgt = ti
+            else:
+                accum_delay = max(0.0, accum_delay - 1200.0)
+                last_tgt = -1
+
+        s = 0
+        while s < n_slots_n:
+            si = slot_start_temp + s
+            ti = schedule[si]
+            if ti >= 0 and night_success[s]:
+                req_L = target_n_slots[ti]
+                is_full = True
+                for k in range(req_L):
+                    if s + k >= n_slots_n or schedule[slot_start_temp + s + k] != ti or not night_success[s + k]:
+                        is_full = False
+                        break
+                if is_full:
+                    obs_ti_success.add(ti)
+                    s += req_L
+                    continue
+            s += 1
+
         slot_start_temp += n_slots_n
 
     total_slots = len(schedule)
@@ -1683,7 +1814,7 @@ def calculate_schedule_teff(schedule, n_nights, night_slots_start, night_slots_e
 # ============================================================
 def worker_task(args):
     (
-        worker_id, seed, initial_schedule, vis_map, teff_map, target_priority, target_category_code, target_n_slots,
+        worker_id, seed, initial_schedule, vis_map, teff_map, target_priority, target_category_code, target_n_slots, target_pointing_id,
         slot_night_idx, order_pairs_arr, co_adj_matrix, n_nights, fine_alt, fine_az,
         fine_rot, fine_teff, fine_night_minutes, night_slots_start, night_slots_end, co_indices_arr,
         T0, ALPHA, N_ITER, T_MIN, reheat_interval, reheat_factor, reheat_cutoff, use_greedy_init
@@ -1694,12 +1825,17 @@ def worker_task(args):
 
     if use_greedy_init:
         # Generate perturbed priority order to diversify initial greedy schedules.
-        perturbed_priority = target_priority.astype(np.float64) + np.random.uniform(-0.4, 0.4, size=len(target_priority))
+        perturbed_priority = np.zeros(len(target_priority), dtype=np.float64)
+        for i in range(len(target_priority)):
+            if target_category_code[i] == 2: # GE target
+                perturbed_priority[i] = -100.0 + float(target_priority[i])
+            else:
+                perturbed_priority[i] = float(target_priority[i]) + np.random.uniform(-0.4, 0.4)
         priority_order = np.argsort(perturbed_priority)
 
         # Generate the personalized randomized greedy initial schedule for this seed
         schedule = greedy_initial_schedule(
-            target_priority, target_category_code, target_n_slots, slot_night_idx, order_pairs_arr,
+            target_priority, target_category_code, target_n_slots, target_pointing_id, slot_night_idx, order_pairs_arr,
             fine_alt, fine_az, fine_rot, fine_night_minutes, night_slots_start, night_slots_end, priority_order
         )
     else:
@@ -1707,7 +1843,7 @@ def worker_task(args):
         schedule = initial_schedule.copy()
 
     best_sched, best_score = sa_optimize(
-        schedule, vis_map, teff_map, target_priority, target_category_code, target_n_slots, slot_night_idx,
+        schedule, vis_map, teff_map, target_priority, target_category_code, target_n_slots, target_pointing_id, slot_night_idx,
         order_pairs_arr, co_adj_matrix, n_nights, fine_alt, fine_az, fine_rot, fine_teff,
         fine_night_minutes, night_slots_start, night_slots_end, co_indices_arr,
         T0, ALPHA, N_ITER, T_MIN, seed, worker_id, reheat_interval, reheat_factor, reheat_cutoff
@@ -1769,21 +1905,31 @@ def main():
     n_targets, n_slots = vis_map.shape
     print(f"  Targets: {n_targets},  Slots: {n_slots}")
 
-    # 順序制約
+    # 順序制約とポインティングID
     ra = data["target_ra"]
     dec = data["target_dec"]
+    target_codes = data["target_codes"]
     coords = [(round(float(r), 5), round(float(d), 5)) for r, d in zip(ra, dec)]
     from collections import defaultdict
     coord_to_indices = defaultdict(list)
     for i, c in enumerate(coords):
         coord_to_indices[c].append(i)
+
+    # ポインティングID（座標ごとに一意な整数ID）の割り当て
+    target_pointing_id = np.zeros(n_targets, dtype=np.int32)
+    coords_unique = {}
+    for i, c in enumerate(coords):
+        if c not in coords_unique:
+            coords_unique[c] = len(coords_unique)
+        target_pointing_id[i] = coords_unique[c]
     
     order_pairs = []
-    for idxs in coord_to_indices.values():
+    for c, idxs in coord_to_indices.items():
         if len(idxs) > 1:
-            for i in range(len(idxs) - 1):
-                for j in range(i + 1, len(idxs)):
-                    order_pairs.append((idxs[i], idxs[j]))
+            idxs_sorted = sorted(idxs, key=lambda idx: str(target_codes[idx]))
+            for i in range(len(idxs_sorted) - 1):
+                for j in range(i + 1, len(idxs_sorted)):
+                    order_pairs.append((idxs_sorted[i], idxs_sorted[j]))
 
     # CO隣接関係
     target_category = data["target_category"]
@@ -1816,7 +1962,7 @@ def main():
             unique_pris = sorted(np.unique(pri_cat))
             n_unique = len(unique_pris)
             if str(cat) == "GE":
-                new_priority[idx] = 1
+                new_priority[idx] = pri_cat
             elif n_unique <= 1:
                 new_priority[idx] = 1
             else:
@@ -1876,7 +2022,13 @@ def main():
             night_slots_end[d] = slots[-1] + 1
 
     # 優先度順ソート (Greedy用)
-    priority_order = np.argsort(target_priority, kind="stable")
+    main_priority_order = np.zeros(n_targets, dtype=np.float64)
+    for i in range(n_targets):
+        if target_category_code[i] == 2: # GE target
+            main_priority_order[i] = -100.0 + float(target_priority[i])
+        else:
+            main_priority_order[i] = float(target_priority[i])
+    priority_order = np.argsort(main_priority_order, kind="stable")
 
     # 3D 浮動小数点配列の確保
     fine_alt = data["fine_alt"].astype(np.float64)
@@ -1894,7 +2046,7 @@ def main():
     # 2. 初期解（貪欲法 JIT版）
     print("\n[2] Greedy warm-start (JIT)...")
     schedule = greedy_initial_schedule(
-        target_priority, target_category_code, target_n_slots, slot_night_idx, order_pairs_arr,
+        target_priority, target_category_code, target_n_slots, target_pointing_id, slot_night_idx, order_pairs_arr,
         fine_alt, fine_az, fine_rot, fine_night_minutes, night_slots_start, night_slots_end, priority_order
     )
 
@@ -1902,7 +2054,7 @@ def main():
     print("\n[3] Pre-compiling JIT functions (Warmup)...")
     print("  (Compiling JIT functions first time... please wait a moment)")
     sa_optimize(
-        schedule, vis_map, teff_map, target_priority, target_category_code, target_n_slots, slot_night_idx, order_pairs_arr, co_adj_matrix, n_nights,
+        schedule, vis_map, teff_map, target_priority, target_category_code, target_n_slots, target_pointing_id, slot_night_idx, order_pairs_arr, co_adj_matrix, n_nights,
         fine_alt, fine_az, fine_rot, fine_teff, fine_night_minutes, night_slots_start, night_slots_end, co_indices_arr,
         T0, ALPHA, 1, T_MIN, 42, -1, REHEAT_INTERVAL, REHEAT_FACTOR, REHEAT_CUTOFF
     )
@@ -1946,7 +2098,7 @@ def main():
                 if phase == 1:
                     # Phase 1: all start from greedy
                     worker_args.append((
-                        w_id, w_seed, schedule, vis_map, teff_map, target_priority, target_category_code, target_n_slots,
+                        w_id, w_seed, schedule, vis_map, teff_map, target_priority, target_category_code, target_n_slots, target_pointing_id,
                         slot_night_idx, order_pairs_arr, co_adj_matrix, n_nights, fine_alt, fine_az,
                         fine_rot, fine_teff, fine_night_minutes, night_slots_start, night_slots_end, co_indices_arr,
                         phase_T0, ALPHA, iter_per_phase, T_MIN, REHEAT_INTERVAL, REHEAT_FACTOR, REHEAT_CUTOFF, True
@@ -1962,7 +2114,7 @@ def main():
                         init_sched = all_results[elite_idx][0]
                     
                     worker_args.append((
-                        w_id, w_seed, init_sched, vis_map, teff_map, target_priority, target_category_code, target_n_slots,
+                        w_id, w_seed, init_sched, vis_map, teff_map, target_priority, target_category_code, target_n_slots, target_pointing_id,
                         slot_night_idx, order_pairs_arr, co_adj_matrix, n_nights, fine_alt, fine_az,
                         fine_rot, fine_teff, fine_night_minutes, night_slots_start, night_slots_end, co_indices_arr,
                         phase_T0, ALPHA, iter_per_phase, T_MIN, REHEAT_INTERVAL, REHEAT_FACTOR, REHEAT_CUTOFF, False

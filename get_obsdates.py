@@ -5,8 +5,7 @@ import datetime
 import urllib.request
 import urllib.parse
 from html.parser import HTMLParser
-from obs_utils import load_config
-
+from obs_utils import load_config, setup_observer, parse_time
 
 # Month abbreviation mapping for NAOJ schedule CGI
 MONTH_MAP = {
@@ -14,59 +13,89 @@ MONTH_MAP = {
     7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
 }
 
-class ScheduleHTMLParser(HTMLParser):
+VOID_TAGS = {"br", "img", "hr", "meta", "link", "input", "p"}
+
+class TagNode:
     """
-    Robust parser for the Subaru telescope schedule CGI table.
-    Handles implicit row/cell closures due to sloppy CGI output.
+    DOM Node representing an HTML element or text fragment.
+    """
+    def __init__(self, tag, attrs=None):
+        self.tag = tag.lower()
+        self.attrs = dict(attrs) if attrs else {}
+        self.children = []
+
+    def text(self):
+        parts = []
+        for child in self.children:
+            if isinstance(child, str):
+                parts.append(child)
+            else:
+                parts.append(child.text())
+        return " ".join("".join(parts).split())
+
+    def find_all(self, tag_name):
+        results = []
+        target = tag_name.lower()
+        for child in self.children:
+            if isinstance(child, TagNode):
+                if child.tag == target:
+                    results.append(child)
+                results.extend(child.find_all(target))
+        return results
+
+    def find(self, tag_name):
+        target = tag_name.lower()
+        for child in self.children:
+            if isinstance(child, TagNode):
+                if child.tag == target:
+                    return child
+                found = child.find(target)
+                if found is not None:
+                    return found
+        return None
+
+
+class ScheduleDOMParser(HTMLParser):
+    """
+    Robust DOM tree parser for HTML containing tables, nested tables,
+    and unclosed or implicit tags from CGI outputs.
     """
     def __init__(self):
         super().__init__()
-        self.in_table = False
-        self.current_row = []
-        self.current_cell = None
-        self.rows = []
-        
-    def close_cell(self):
-        if self.current_cell:
-            self.current_row.append(self.current_cell)
-            self.current_cell = None
+        self.root = TagNode("root")
+        self.stack = [self.root]
 
-    def close_row(self):
-        self.close_cell()
-        if self.current_row:
-            self.rows.append(self.current_row)
-            self.current_row = []
+    def current_node(self):
+        return self.stack[-1] if self.stack else self.root
+
+    def close_tags_up_to(self, tag_names):
+        while len(self.stack) > 1 and self.stack[-1].tag in tag_names:
+            self.stack.pop()
 
     def handle_starttag(self, tag, attrs):
-        attrs_dict = dict(attrs)
-        if tag == "table":
-            if "border" in attrs_dict and "cellpadding" in attrs_dict:
-                self.in_table = True
-                
-        if self.in_table:
-            if tag == "tr":
-                self.close_row()
-            elif tag in ["th", "td"]:
-                self.close_cell()
-                self.current_cell = {
-                    "tag": tag,
-                    "attrs": attrs_dict,
-                    "text": ""
-                }
-                
+        tag = tag.lower()
+        if tag == "tr":
+            self.close_tags_up_to(["td", "th", "tr", "font", "b", "i", "a", "center", "span"])
+        elif tag in ["td", "th"]:
+            self.close_tags_up_to(["td", "th", "font", "b", "i", "a", "center", "span"])
+
+        node = TagNode(tag, attrs)
+        self.current_node().children.append(node)
+        if tag not in VOID_TAGS:
+            self.stack.append(node)
+
     def handle_endtag(self, tag):
-        if self.in_table:
-            if tag == "table":
-                self.close_row()
-                self.in_table = False
-            elif tag == "tr":
-                self.close_row()
-            elif tag in ["th", "td"]:
-                self.close_cell()
-                    
+        tag = tag.lower()
+        if tag in VOID_TAGS:
+            return
+        for i in range(len(self.stack) - 1, 0, -1):
+            if self.stack[i].tag == tag:
+                self.stack = self.stack[:i]
+                break
+
     def handle_data(self, data):
-        if self.in_table and self.current_cell:
-            self.current_cell["text"] += data
+        if self.stack:
+            self.stack[-1].children.append(data)
 
 
 class ObstimeHTMLParser(HTMLParser):
@@ -132,108 +161,155 @@ def get_month_num(month_name):
     raise ValueError(f"Invalid month name: {month_name}")
 
 
-def parse_html_schedule(html_content):
-    parser = ScheduleHTMLParser()
-    parser.feed(html_content)
+def extract_ssp_slot(sub_texts):
+    """
+    Given sub-allocations for a day (in chronological order from top to bottom),
+    determine the SSP PFS slot (whole, first, second, first_<frac>, second_<frac>).
+    """
+    if not sub_texts:
+        return None
+
+    # Handle dash separated text if single string
+    if len(sub_texts) == 1 and re.search(r'-{3,}', sub_texts[0]):
+        sub_texts = [p.strip() for p in re.split(r'-{3,}', sub_texts[0]) if p.strip()]
+
+    ssp_indices = []
+    ssp_fracs = []
     
-    rows = parser.rows
-    weeks = []
-    current_week = None
+    for i, raw_text in enumerate(sub_texts):
+        text = raw_text.upper()
+        if "SSP" in text and "PFS" in text:
+            m = re.search(r'SSP\s*\(\s*([\d\.]+)\s*\)', raw_text, re.IGNORECASE)
+            frac = float(m.group(1)) if m else None
+            ssp_indices.append(i)
+            ssp_fracs.append(frac)
+
+    if not ssp_indices:
+        return None
+
+    n = len(sub_texts)
+    
+    # If all slots are SSP PFS, or only 1 slot with no fraction or frac=1.0
+    if len(ssp_indices) == n or (n == 1 and (ssp_fracs[0] is None or ssp_fracs[0] == 1.0)):
+        return "whole"
+
+    # If single SSP slot among multiple
+    if len(ssp_indices) == 1:
+        idx = ssp_indices[0]
+        frac = ssp_fracs[0]
+        if frac is None:
+            frac = 0.5 if n == 2 else (1.0 / n)
+
+        if frac == 1.0:
+            return "whole"
+        if idx == 0:
+            return "first" if frac == 0.5 else f"first_{frac}"
+        elif idx == n - 1:
+            return "second" if frac == 0.5 else f"second_{frac}"
+        else:
+            return f"second_{frac}"
+
+    total_frac = sum(f if f is not None else (1.0 / n) for f in ssp_fracs)
+    if ssp_indices == [0]:
+        return f"first_{total_frac}"
+    else:
+        return f"second_{total_frac}"
+
+
+def parse_html_schedule(html_content):
+    parser = ScheduleDOMParser()
+    parser.feed(html_content)
+
+    # Find the main schedule table containing weekday headers
+    all_tables = parser.root.find_all("table")
+    main_table = None
+    for tbl in all_tables:
+        header_ths = tbl.find_all("th")
+        th_texts = [th.text() for th in header_ths]
+        if any("Sun" in t for t in th_texts) and any("Mon" in t for t in th_texts):
+            main_table = tbl
+            break
+
+    if not main_table:
+        return []
+
+    # Extract direct rows of main_table (including tbody wrapper if any)
+    direct_trs = []
+    for child in main_table.children:
+        if isinstance(child, TagNode):
+            if child.tag == "tr":
+                direct_trs.append(child)
+            elif child.tag == "tbody":
+                for sub in child.children:
+                    if isinstance(sub, TagNode) and sub.tag == "tr":
+                        direct_trs.append(sub)
+
     month_pattern = re.compile(r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d+)', re.IGNORECASE)
     
-    for row in rows:
-        if not row:
+    weeks = []
+    current_header = None
+
+    for tr in direct_trs:
+        cells = [c for c in tr.children if isinstance(c, TagNode) and c.tag in ["th", "td"]]
+        if not cells:
             continue
-        
-        # Check if this is a header row for a week
-        is_header = False
+
+        # Check if this row is the top weekday header (Sun, Mon, ...)
+        cell_texts = [c.text().strip() for c in cells]
+        if any(w in cell_texts for w in ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]):
+            continue
+
+        # Check if this row is a date header row (Sep 01, Sep 02...)
+        has_dates = False
         row_days = [None] * 7
-        for i, cell in enumerate(row[:7]):
-            text = cell["text"].strip()
+        col = 0
+        for cell in cells:
+            colspan = int(cell.attrs.get("colspan", 1))
+            text = cell.text().strip()
             match = month_pattern.search(text)
             if match:
-                is_header = True
-                row_days[i] = int(match.group(2))
-                
-        if is_header:
-            if current_week:
-                weeks.append(current_week)
-            current_week = {
-                "days": row_days,
-                "assignments": []
-            }
-        elif current_week:
-            # Check if this is a weekday header row (Sun, Mon...)
-            first_cell_text = row[0]["text"].strip()
-            if first_cell_text in ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]:
-                continue
-            current_week["assignments"].append(row)
-            
-    if current_week:
-        weeks.append(current_week)
-        
+                has_dates = True
+                day_num = int(match.group(2))
+                if col < 7:
+                    row_days[col] = day_num
+            col += colspan
+
+        if has_dates:
+            current_header = row_days
+        elif current_header is not None:
+            # This is the assignment row following the date header row
+            weeks.append({
+                "days": current_header,
+                "row_node": tr
+            })
+            current_header = None
+
     results = []
     for week in weeks:
         days = week["days"]
-        assign_rows = week["assignments"]
-        n_assign = len(assign_rows)
-        if n_assign == 0:
-            continue
-            
-        grid_rows = max(n_assign, 2)
-        grid = [[None] * 7 for _ in range(grid_rows)]
+        tr_node = week["row_node"]
+        cells = [c for c in tr_node.children if isinstance(c, TagNode) and c.tag in ["td", "th"]]
         
-        for r_idx, row in enumerate(assign_rows):
-            c_idx = 0
-            for cell in row:
-                while c_idx < 7 and grid[r_idx][c_idx] is not None:
-                    c_idx += 1
-                if c_idx >= 7:
-                    break
-                    
-                colspan = int(cell["attrs"].get("colspan", 1))
-                rowspan = int(cell["attrs"].get("rowspan", 1))
-                
-                for dr in range(rowspan):
-                    for dc in range(colspan):
-                        if r_idx + dr < grid_rows and c_idx + dc < 7:
-                            grid[r_idx + dr][c_idx + dc] = cell
-                c_idx += colspan
-                
-        for col in range(7):
-            day = days[col]
-            if day is None:
-                continue
-                
-            first_half_cell = grid[0][col]
-            second_half_cell = grid[1][col] if grid_rows > 1 else None
-            
-            def is_ssp_pfs(cell):
-                if not cell:
-                    return False
-                text = cell["text"].strip().upper()
-                text_clean = "".join(text.split())
-                return "SSPPFS" in text_clean
-                
-            first_ssp = is_ssp_pfs(first_half_cell)
-            second_ssp = is_ssp_pfs(second_half_cell)
-            
-            is_whole_night = False
-            if first_half_cell and second_half_cell and first_half_cell == second_half_cell:
-                is_whole_night = True
-            elif n_assign == 1:
-                is_whole_night = True
-                
-            if is_whole_night:
-                if first_ssp:
-                    results.append((day, "whole"))
+        col_idx = 0
+        for cell in cells:
+            colspan = int(cell.attrs.get("colspan", 1))
+            nested_table = cell.find("table")
+            if nested_table:
+                sub_tds = nested_table.find_all("td")
+                sub_texts = [std.text() for std in sub_tds]
             else:
-                if first_ssp:
-                    results.append((day, "first"))
-                if second_ssp:
-                    results.append((day, "second"))
-                    
-    return results
+                sub_texts = [cell.text()]
+
+            ssp_slot = extract_ssp_slot(sub_texts)
+
+            for offset in range(colspan):
+                c = col_idx + offset
+                if c < 7 and days[c] is not None and ssp_slot is not None:
+                    results.append((days[c], ssp_slot))
+
+            col_idx += colspan
+
+    return sorted(results, key=lambda x: x[0])
 
 
 def parse_obstime_table(html_content):
@@ -244,19 +320,25 @@ def parse_obstime_table(html_content):
 
 def lookup_obstime(dt, obstime_rows):
     for row in obstime_rows:
+        if not row:
+            continue
         period = row[0]
         match = re.match(r'(\d+)/(\d+)-(\d+)/(\d+)', period)
         if match:
-            start_m = int(match.group(1))
-            start_d = int(match.group(2))
-            end_m = int(match.group(3))
-            end_d = int(match.group(4))
-            
-            start_date = datetime.date(dt.year, start_m, start_d)
-            end_date = datetime.date(dt.year, end_m, end_d)
-            
-            if start_date <= dt <= end_date:
-                return row
+            start_m, start_d, end_m, end_d = map(int, match.groups())
+            if start_m <= end_m:
+                start_date = datetime.date(dt.year, start_m, start_d)
+                end_date = datetime.date(dt.year, end_m, end_d)
+                if start_date <= dt <= end_date:
+                    return row
+            else:
+                # Crosses new year
+                start_date_prev = datetime.date(dt.year - 1, start_m, start_d)
+                end_date_curr = datetime.date(dt.year, end_m, end_d)
+                start_date_curr = datetime.date(dt.year, start_m, start_d)
+                end_date_next = datetime.date(dt.year + 1, end_m, end_d)
+                if (start_date_prev <= dt <= end_date_curr) or (start_date_curr <= dt <= end_date_next):
+                    return row
     return None
 
 
@@ -306,8 +388,10 @@ def main():
     # 2. Fetch Observing Time Table definitions from Subaru website
     print("Fetching observing time definitions from NAOJ website...")
     obstime_url = "https://www.naoj.org/Observing/def_obstime.html"
+    headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64)"}
     try:
-        with urllib.request.urlopen(obstime_url) as response:
+        req_obstime = urllib.request.Request(obstime_url, headers=headers)
+        with urllib.request.urlopen(req_obstime, timeout=15) as response:
             obstime_html = response.read().decode("utf-8")
         obstime_rows = parse_obstime_table(obstime_html)
         print(f"Successfully loaded {len(obstime_rows)} observing time ranges.")
@@ -320,9 +404,9 @@ def main():
     print("Fetching telescope schedule from NAOJ CGI...")
     schedule_url = "https://www.naoj.org/cgi-bin/opecenter/schedule.cgi"
     data = urllib.parse.urlencode({"year": str(year), "month": month}).encode("utf-8")
-    req = urllib.request.Request(schedule_url, data=data, method="POST")
     try:
-        with urllib.request.urlopen(req) as response:
+        req = urllib.request.Request(schedule_url, data=data, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as response:
             schedule_html = response.read().decode("iso-8859-1")
     except Exception as e:
         print(f"Error fetching schedule: {e}")
@@ -376,6 +460,27 @@ def main():
         elif slot == "second":
             start_val = format_time_24h_plus(add_minutes_to_time_str(t_split, split_margin))
             end_val = "twilight_beg"
+        elif slot.startswith("first_") or slot.startswith("second_"):
+            frac = float(slot.split("_")[1])
+            observer = setup_observer()
+            t_end_utc = parse_time(date_str, 'twilight_end', observer).datetime
+            t_beg_utc = parse_time(date_str, 'twilight_beg', observer).datetime
+            duration = t_beg_utc - t_end_utc
+            
+            if slot.startswith("first_"):
+                split_time_utc = t_end_utc + duration * frac
+                split_time_hst = split_time_utc + datetime.timedelta(hours=-10) - datetime.timedelta(minutes=split_margin)
+                h = split_time_hst.hour
+                if h < 12: h += 24
+                start_val = "twilight_end"
+                end_val = f"{h:02d}:{split_time_hst.minute:02d}"
+            else:
+                split_time_utc = t_end_utc + duration * (1.0 - frac)
+                split_time_hst = split_time_utc + datetime.timedelta(hours=-10) + datetime.timedelta(minutes=split_margin)
+                h = split_time_hst.hour
+                if h < 12: h += 24
+                start_val = f"{h:02d}:{split_time_hst.minute:02d}"
+                end_val = "twilight_beg"
             
         output_lines.append(f"{date_str:<11}{start_val:<15}{end_val}")
 

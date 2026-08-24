@@ -23,7 +23,7 @@ constraints:
   max_airmass_relaxed: 1.85    # Maximum airmass limit when relaxed constraints are allowed
   min_altitude: 32.5           # Minimum altitude limit in degrees
   max_altitude: 75.0           # Maximum altitude limit in degrees (avoidance zone near zenith)
-  min_teff: 0.6                # Minimum effective exposure time factor (t_eff) allowed for scheduled targets
+  min_teff: 0.65                # Minimum effective exposure time factor (t_eff) allowed for scheduled targets
   rotator_min: -174.0          # Minimum instrument rotator limit in degrees
   rotator_max: 174.0           # Maximum instrument rotator limit in degrees
   min_moon_sep: 20.0           # Minimum angular separation from the Moon in degrees
@@ -58,11 +58,13 @@ scheduler:
   sa_reheat_cutoff: 0.8        # Stop reheating after this fraction of total iterations
   population_phases: 4         # Number of phases for population-based SA
   elite_fraction: 0.5          # Fraction of top workers whose schedules are kept (rest restart from elite)
-  target_ratio_co: 0.50        # Target slot ratio for CO category
-  target_ratio_ga: 0.00        # Target slot ratio for GA category
-  target_ratio_ge: 0.50        # Target slot ratio for GE category
-  target_ratio_tolerance: 0.05 # Allowed tolerance (+/- 5%)
-  weight_ratio_penalty: 50000.0 # Penalty weight for ratio deviations exceeding tolerance
+  target_ratio_co: 0.54        # Target slot ratio for CO category
+  target_ratio_ga: 0.46        # Target slot ratio for GA category
+  target_ratio_ge: 0.00        # Target slot ratio for GE category
+  target_ratio_tolerance: 0.02 # Allowed tolerance (+/- 2%)
+  weight_ratio_penalty: 1000000.0 # Penalty weight for ratio deviations exceeding tolerance
   normalize_priority_by_category: true # Normalize priorities within each category to [1, max_priority] range
   enforce_ge_priority_as_order: true   # Treat GE target priorities as sequential order constraints (1 before 2, etc.)
+  weight_pointing_switch: 2000.0       # Penalty weight for frequent switching between different pointings in the same category
+  weight_category_switch: 50000.0      # Penalty weight for more than 1 category switch per night (ensures block scheduling)
 
