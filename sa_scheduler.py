@@ -69,6 +69,8 @@ RATIO_TOLERANCE = config['scheduler'].get('target_ratio_tolerance', 0.05)
 W_RATIO_PENALTY = config['scheduler'].get('weight_ratio_penalty', 50000.0)
 W_POINTING_SWITCH = config['scheduler'].get('weight_pointing_switch', 2000.0)
 W_CATEGORY_SWITCH = config['scheduler'].get('weight_category_switch', 50000.0)
+MIN_CATEGORY_BLOCK_SLOTS = config['scheduler'].get('min_category_block_slots', 4)
+W_MIN_CATEGORY_BLOCK = config['scheduler'].get('weight_min_category_block', 30000.0)
 
 # 望遠鏡スルー速度
 SLEW_SPEED_AZ = config['slew']['speed_az']
@@ -421,6 +423,34 @@ def compute_score(
                 excess_cat_switches += (switches_in_night - 1)
         score -= W_CATEGORY_SWITCH * excess_cat_switches
 
+    # 9. カテゴリ最小連続スロット数ペナルティ (各カテゴリの観測は最低4スロット連続)
+    if W_MIN_CATEGORY_BLOCK > 0.0 and MIN_CATEGORY_BLOCK_SLOTS > 1:
+        short_blocks_penalty = 0.0
+        for d in range(n_nights):
+            s_start = night_slots_start[d]
+            s_end = night_slots_end[d]
+            last_cat = -1
+            block_len = 0
+            for s in range(s_start, s_end):
+                ti = schedule[s]
+                if ti >= 0 and slot_success[s]:
+                    cat = target_category_code[ti]
+                    if cat == last_cat:
+                        block_len += 1
+                    else:
+                        if last_cat >= 0 and block_len < MIN_CATEGORY_BLOCK_SLOTS:
+                            short_blocks_penalty += (MIN_CATEGORY_BLOCK_SLOTS - block_len) * W_MIN_CATEGORY_BLOCK
+                        last_cat = cat
+                        block_len = 1
+                else:
+                    if last_cat >= 0 and block_len < MIN_CATEGORY_BLOCK_SLOTS:
+                        short_blocks_penalty += (MIN_CATEGORY_BLOCK_SLOTS - block_len) * W_MIN_CATEGORY_BLOCK
+                    last_cat = -1
+                    block_len = 0
+            if last_cat >= 0 and block_len < MIN_CATEGORY_BLOCK_SLOTS:
+                short_blocks_penalty += (MIN_CATEGORY_BLOCK_SLOTS - block_len) * W_MIN_CATEGORY_BLOCK
+        score -= short_blocks_penalty
+
     return score
 
 @njit
@@ -465,6 +495,7 @@ def greedy_initial_schedule(
         last_target = -1
         current_pid = -1
         current_cat = -1
+        current_cat_slots = 0
         night_cat_switches = 0
 
         k = 0
@@ -472,8 +503,9 @@ def greedy_initial_schedule(
             placed = False
 
             # パス0: 直前と同じポインティングの未割当天体を最優先
-            # パス1: 通常の優先度順で探索
-            for pass_idx in range(2):
+            # パス1: 通常の優先度順で探索（カテゴリ切り替え条件を厳格にチェック）
+            # パス2: 緩和探索（残枠埋め用）
+            for pass_idx in range(3):
                 if placed:
                     break
                 for ti in priority_order:
@@ -487,10 +519,14 @@ def greedy_initial_schedule(
                         if current_pid < 0 or ti_pid != current_pid or ti_cat != current_cat:
                             continue
 
-                    # すでにその夜で1回カテゴリが切り替わっている場合、さらに新しいカテゴリへの切り替えは禁止
-                    if current_cat >= 0 and ti_cat != current_cat:
-                        if night_cat_switches >= 1:
-                            continue
+                    if pass_idx <= 1:
+                        # すでにその夜で1回カテゴリが切り替わっている場合、さらに新しいカテゴリへの切り替えは禁止
+                        if current_cat >= 0 and ti_cat != current_cat:
+                            if night_cat_switches >= 1:
+                                continue
+                            # 最低連続スロット数（4スロット）未満での切り替えを禁止
+                            if current_cat_slots < MIN_CATEGORY_BLOCK_SLOTS:
+                                continue
 
                     has_unassigned_prior = False
                     for ta in range(n_targets):
@@ -570,6 +606,9 @@ def greedy_initial_schedule(
                         new_cat = target_category_code[ti]
                         if current_cat >= 0 and new_cat != current_cat:
                             night_cat_switches += 1
+                            current_cat_slots = L
+                        else:
+                            current_cat_slots += L
                         current_pid = target_pointing_id[ti]
                         current_cat = new_cat
                         last_global_pid = current_pid
@@ -632,6 +671,8 @@ def sa_optimize(
     for i in range(n_targets):
         if target_category_code[i] == 2: # GE target
             perturbed_priority[i] = -100.0 + float(target_priority[i])
+        elif target_category_code[i] == 1: # GA target
+            perturbed_priority[i] = float(target_priority[i]) + np.random.uniform(-0.1, 0.1)
         else:
             perturbed_priority[i] = float(target_priority[i]) + np.random.uniform(-0.4, 0.4)
     priority_order = np.argsort(perturbed_priority)
@@ -1829,6 +1870,8 @@ def worker_task(args):
         for i in range(len(target_priority)):
             if target_category_code[i] == 2: # GE target
                 perturbed_priority[i] = -100.0 + float(target_priority[i])
+            elif target_category_code[i] == 1: # GA target
+                perturbed_priority[i] = float(target_priority[i]) + np.random.uniform(-0.1, 0.1)
             else:
                 perturbed_priority[i] = float(target_priority[i]) + np.random.uniform(-0.4, 0.4)
         priority_order = np.argsort(perturbed_priority)
@@ -1944,6 +1987,15 @@ def main():
             ge_sorted = sorted(ge_indices, key=lambda i: int(data["target_priority"][i]))
             for i in range(len(ge_sorted) - 1):
                 order_pairs.append((ge_sorted[i], ge_sorted[i+1]))
+
+    # Treat GA targets in exact list order if configured
+    enforce_ga_order = config.get('scheduler', {}).get('enforce_ga_list_priority', True)
+    if enforce_ga_order:
+        print("  Enforcing GA list order constraints (P00 -> P01 -> P02 -> P03 -> P04)...")
+        ga_indices = [i for i in range(n_targets) if str(target_category[i]) == "GA"]
+        if len(ga_indices) > 0:
+            for i in range(len(ga_indices) - 1):
+                order_pairs.append((ga_indices[i], ga_indices[i+1]))
                 
     order_pairs_arr = np.array(order_pairs, dtype=np.int32) if len(order_pairs) > 0 else np.zeros((0, 2), dtype=np.int32)
     print(f"  Detected {len(order_pairs)} target pairs requiring order preservation.")

@@ -8,6 +8,7 @@ def main():
     json_path = "schedule_result.json"
     co_csv_path = "pfs_designs/CO_summary_reconfigure.csv"
     ge_csv_path = "pfs_designs/GE_summary_reconfigure.csv"
+    ga_csv_path = "pfs_designs/GA_summary_reconfigure.csv"
     
     # 1. Load schedule result
     if not os.path.exists(json_path):
@@ -49,29 +50,31 @@ def main():
 
     # Helper to parse and map unscheduled target observation time to the target day
     def map_to_target_day(orig_obstime_str, has_z=False):
+        clean_str = orig_obstime_str.split(".")[0].replace("Z", "")
         if has_z:
-            dt_utc = datetime.strptime(orig_obstime_str.replace("Z", ""), "%Y-%m-%dT%H:%M:%S")
+            dt_utc = datetime.strptime(clean_str, "%Y-%m-%dT%H:%M:%S")
             dt_hst = dt_utc - timedelta(hours=10)
-            new_dt_hst = datetime(
-                year=target_date_hst.year,
-                month=target_date_hst.month,
-                day=target_date_hst.day,
-                hour=dt_hst.hour,
-                minute=dt_hst.minute,
-                second=dt_hst.second
-            )
+        else:
+            dt_hst = datetime.strptime(clean_str, "%Y-%m-%dT%H:%M:%S")
+
+        # If observation time is past midnight (hour < 12), it belongs to the morning following target_date_hst
+        if dt_hst.hour < 12:
+            assigned_date = target_date_hst + timedelta(days=1)
+        else:
+            assigned_date = target_date_hst
+
+        new_dt_hst = datetime(
+            year=assigned_date.year,
+            month=assigned_date.month,
+            day=assigned_date.day,
+            hour=dt_hst.hour,
+            minute=dt_hst.minute,
+            second=dt_hst.second
+        )
+        if has_z:
             new_dt_utc = new_dt_hst + timedelta(hours=10)
             return new_dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
         else:
-            dt_hst = datetime.strptime(orig_obstime_str, "%Y-%m-%dT%H:%M:%S")
-            new_dt_hst = datetime(
-                year=target_date_hst.year,
-                month=target_date_hst.month,
-                day=target_date_hst.day,
-                hour=dt_hst.hour,
-                minute=dt_hst.minute,
-                second=dt_hst.second
-            )
             return new_dt_hst.strftime("%Y-%m-%dT%H:%M:%S")
 
     # Helper to format scheduled time
@@ -85,7 +88,7 @@ def main():
         return obstime_utc, obstime
 
     # 2. Process CSV files
-    for csv_path, is_co in [(co_csv_path, True), (ge_csv_path, False)]:
+    for csv_path, is_co in [(co_csv_path, True), (ge_csv_path, False), (ga_csv_path, False)]:
         if not os.path.exists(csv_path):
             print(f"Warning: {csv_path} not found. Skipping.")
             continue

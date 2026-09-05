@@ -50,7 +50,7 @@ scheduler:
   weight_conn: 0.0             # Reward weight for consecutive slots of the same target (0.0 to disable)
   weight_empty: 5000.0         # Penalty weight for empty/idle slots
   weight_slew: 5.0             # Direct penalty weight for telescope slew times
-  max_priority: 4              # Maximum scientific priority value considered by the scheduler
+  max_priority: 5              # Maximum scientific priority value considered by the scheduler
   max_overtime_minutes: 10     # Maximum allowed observation extension beyond night length in minutes
   weight_overtime: 1000.0      # Penalty weight per minute of overtime extension
   sa_reheat_interval: 250000   # Number of iterations between reheating events
@@ -67,4 +67,7 @@ scheduler:
   enforce_ge_priority_as_order: true   # Treat GE target priorities as sequential order constraints (1 before 2, etc.)
   weight_pointing_switch: 2000.0       # Penalty weight for frequent switching between different pointings in the same category
   weight_category_switch: 50000.0      # Penalty weight for more than 1 category switch per night (ensures block scheduling)
+  min_category_block_slots: 4          # Minimum consecutive slots for each category block in a night
+  weight_min_category_block: 30000.0   # Penalty weight for category blocks shorter than minimum
+  enforce_ga_list_priority: true       # Prioritize GA targets in the order listed in ppcList.ecsv (P00 -> P01 -> P02 -> P03 -> P04)
 
